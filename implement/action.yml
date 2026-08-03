@@ -1,0 +1,105 @@
+name: 'Claude Code issue implementation'
+description: >
+  Branch for an issue and let Claude Code implement the fix it planned during triage, resuming that conversation.
+
+inputs:
+  issue-number:
+    description: Number of the issue being fixed.
+    required: true
+  github-token:
+    description: >
+      Token the agent uses for git and gh — it opens the pull request itself, so it needs contents:write and pull-requests:write.
+    required: true
+  anthropic-api-key:
+    description: Anthropic API key. A composite action cannot read the caller's secrets.
+    required: true
+  resume-session-id:
+    description: >
+      The triage session to continue, so the agent implements the plan it already made instead of re-reading the issue. Empty starts fresh.
+    required: false
+    default: ''
+  claude-args:
+    description: Arguments for the Claude CLI, excluding the resume this action adds.
+    required: false
+    default: '--dangerously-skip-permissions'
+  allowed-bots:
+    description: Comma-separated bot logins whose comments may reach the agent, or "*". Empty allows none.
+    required: false
+    default: ''
+  git-user-name:
+    description: Name the fix branch's commits are authored under.
+    required: true
+  git-user-email:
+    description: Email the fix branch's commits are authored under.
+    required: true
+  branch-prefix:
+    description: Prefix for the fix branch; the issue number is appended.
+    required: false
+    default: claude/issue-
+  prompt-template:
+    description: >
+      Template rendered into the agent's prompt, relative to the workspace. Only `$ISSUE_NUMBER` is substituted — the issue text is already in the resumed conversation.
+    required: false
+    default: .github/prompts/issue-implement.md
+
+outputs:
+  branch:
+    description: The fix branch created for this issue.
+    value: ${{ steps.branch.outputs.name }}
+  session-id:
+    description: The session this run wrote, to resume in a follow-up agent.
+    value: ${{ steps.implement.outputs.session_id }}
+  execution-file:
+    description: Path to the execution log, for the caller to upload as a trace artifact.
+    value: ${{ steps.implement.outputs.execution_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create fix branch
+      id: branch
+      shell: bash
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+        BRANCH="${BRANCH_PREFIX}${ISSUE_NUMBER}"
+        git checkout -b "$BRANCH"
+        echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+    - name: Render prompt
+      id: prompt
+      shell: bash
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        TEMPLATE: ${{ inputs.prompt-template }}
+      run: |
+        set -euo pipefail
+        # Random per run: untrusted text must not be able to terminate its own value.
+        DELIM="EOF_$(openssl rand -hex 16)"
+        {
+          echo "body<<$DELIM"
+          envsubst '$ISSUE_NUMBER' < "$TEMPLATE"
+          echo "$DELIM"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Implement fix
+      id: implement
+      uses: anthropics/claude-code-action@e0cf66d1d257526b5d07f141838c338921cb8455 # v1.0.182
+      with:
+        allowed_bots: ${{ inputs.allowed-bots }}
+        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        claude_args: |
+          ${{ inputs.claude-args }}
+          ${{ inputs.resume-session-id && format('--resume {0}', inputs.resume-session-id) || '' }}
+        github_token: ${{ inputs.github-token }}
+        prompt: ${{ steps.prompt.outputs.body }}
+
+branding:
+  icon: git-branch
+  color: orange

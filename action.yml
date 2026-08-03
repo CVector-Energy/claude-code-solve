@@ -1,0 +1,175 @@
+name: 'Claude Code issue triage'
+description: >
+  Triage a GitHub issue with Claude Code: resume the issue's session, render the prompt, run the agent, and report a disposition, commenting on the issue when there is nothing to fix.
+
+inputs:
+  issue-number:
+    description: Number of the issue being triaged.
+    required: true
+  github-token:
+    description: >
+      Token for gh. Needs issues:write to comment; usually a GitHub App token minted by the calling job.
+    required: true
+  anthropic-api-key:
+    description: Anthropic API key. A composite action cannot read the caller's secrets.
+    required: true
+  claude-args:
+    description: >
+      Arguments for the Claude CLI. The --json-schema must produce `disposition`, one of "no-action", "needs-clarification" or "fixable", and a `summary` shown to the issue author verbatim when clarification is needed.
+    required: true
+  allowed-bots:
+    description: Comma-separated bot logins whose comments may reach the agent, or "*". Empty allows none.
+    required: false
+    default: ''
+  show-full-output:
+    description: Log Claude's full JSON output, tool results included.
+    required: false
+    default: 'false'
+  prompt-template:
+    description: >
+      Template rendered into the agent's prompt, relative to the workspace. `$REPO`, `$ISSUE_NUMBER` and `$ISSUE_BODY` are substituted; nothing else is.
+    required: false
+    default: .github/prompts/issue-triage.md
+  clarification-fallback:
+    description: Question to post when triage asks for clarification without saying what it needs.
+    required: false
+    default: Could you add more detail on the scope and expected outcome so I can plan a fix?
+
+outputs:
+  disposition:
+    description: >
+      "fixable", "needs-clarification" or "no-action". Always one of the three: output that cannot be parsed reports "no-action" rather than nothing, so a caller's gate is never silently false.
+    value: ${{ steps.parse.outputs.disposition }}
+  session-id:
+    description: The session this run wrote, to resume in a later agent.
+    value: ${{ steps.triage.outputs.session_id }}
+  structured-output:
+    description: The JSON the agent returned.
+    value: ${{ steps.triage.outputs.structured_output }}
+  execution-file:
+    description: Path to the execution log, for the caller to upload as a trace artifact.
+    value: ${{ steps.triage.outputs.execution_file }}
+
+runs:
+  using: composite
+  steps:
+    # Scoped to this issue, so a later run on it — a new comment, or a re-run
+    # after a push — continues this conversation and nothing else. The action's
+    # post step saves whatever session this job writes.
+    - name: Restore Claude session
+      id: session
+      uses: CVector-Energy/claude-code-session@f6eb26ff2567feaf7df3f2cf0d4a6d64e0123656 # v0.1.1
+      with:
+        scope: issue-${{ inputs.issue-number }}
+
+    # Fetched and rendered in one step so the issue text stays a shell variable
+    # until it is inside the prompt, rather than crossing a step boundary as an
+    # output where a fixed heredoc delimiter would be terminable by that text.
+    - name: Render prompt
+      id: prompt
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        TEMPLATE: ${{ inputs.prompt-template }}
+      run: |
+        set -euo pipefail
+        ISSUE_BODY=$(
+          gh issue view "$ISSUE_NUMBER" --repo "$REPO" \
+            --json title,body,comments \
+            --jq '"# " + .title + "\n\n" + .body + "\n\n" + ([.comments[] | "---\n**" + .author.login + ":**\n\n" + .body] | join("\n\n"))'
+        )
+        if [ -z "$ISSUE_BODY" ]; then
+          echo "Fetched issue context is empty; aborting." >&2
+          exit 1
+        fi
+        export ISSUE_BODY
+        # Random per run: untrusted text must not be able to terminate its own value.
+        DELIM="EOF_$(openssl rand -hex 16)"
+        {
+          echo "body<<$DELIM"
+          envsubst '$REPO $ISSUE_NUMBER $ISSUE_BODY' < "$TEMPLATE"
+          echo "$DELIM"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Triage issue
+      id: triage
+      uses: anthropics/claude-code-action@e0cf66d1d257526b5d07f141838c338921cb8455 # v1.0.182
+      with:
+        allowed_bots: ${{ inputs.allowed-bots }}
+        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        claude_args: |
+          ${{ inputs.claude-args }}
+          ${{ steps.session.outputs.resume-args }}
+        github_token: ${{ inputs.github-token }}
+        show_full_output: ${{ inputs.show-full-output }}
+        prompt: ${{ steps.prompt.outputs.body }}
+
+    - name: Parse triage result
+      id: parse
+      shell: bash
+      env:
+        STRUCTURED_OUTPUT: ${{ steps.triage.outputs.structured_output }}
+      run: |
+        set -uo pipefail
+        if [ -z "$STRUCTURED_OUTPUT" ]; then
+          echo "disposition=no-action" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # -e on the parse, not the step: unparseable output must still report a
+        # disposition. Falling through to no-action posts a comment; letting it go
+        # empty makes every downstream `if` false and the job succeed having done
+        # nothing at all.
+        DISPOSITION=$(echo "$STRUCTURED_OUTPUT" | jq -er '.disposition' 2>/dev/null || true)
+        case "$DISPOSITION" in
+          no-action|needs-clarification|fixable) ;;
+          *)
+            echo "Triage returned no usable disposition (got '${DISPOSITION}'); treating as no-action." >&2
+            DISPOSITION=no-action
+            ;;
+        esac
+        echo "disposition=$DISPOSITION" >> "$GITHUB_OUTPUT"
+
+    - name: Post clarification comment
+      if: steps.parse.outputs.disposition == 'needs-clarification'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        STRUCTURED_OUTPUT: ${{ steps.triage.outputs.structured_output }}
+        FALLBACK: ${{ inputs.clarification-fallback }}
+      run: |
+        set -uo pipefail
+        QUESTION=$(echo "$STRUCTURED_OUTPUT" | jq -r '.summary // empty')
+        if [ -z "$QUESTION" ]; then
+          # Defensive: summary is required, but never post "null".
+          QUESTION="$FALLBACK"
+        fi
+        printf '%s\n\n%s\n\n%s\n' \
+          "I'd like to help fix this, but I need some clarification first:" \
+          "$QUESTION" \
+          "Once you provide more details, I'll take another look." \
+          | gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file -
+
+    - name: Post no-action comment
+      if: steps.parse.outputs.disposition == 'no-action'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        STRUCTURED_OUTPUT: ${{ steps.triage.outputs.structured_output }}
+      run: |
+        set -uo pipefail
+        SUMMARY=$(echo "$STRUCTURED_OUTPUT" | jq -r '.summary // empty')
+        printf '%s\n\n%s\n\n%s\n' \
+          "I reviewed this issue but determined it is not something I can address with an automated code change." \
+          "**Reason:** ${SUMMARY:-no reason was reported}" \
+          "A team member will review this manually." \
+          | gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file -
+
+branding:
+  icon: search
+  color: orange

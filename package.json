@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-solve",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action: triage and fix a GitHub issue with Claude Code",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test src/*.test.js"
+  },
+  "devDependencies": {
+    "yaml": "2.8.1"
+  },
+  "type": "module"
+}
