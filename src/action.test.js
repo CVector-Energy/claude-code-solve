@@ -113,3 +113,25 @@ test("neither action cleans up after the caller's job", () => {
     assert.ok(action.outputs["execution-file"], `${which} hides the trace path`);
   }
 });
+
+test("triage restores the repo-wide memory store before the agent reads it", () => {
+  const steps = ACTIONS.triage.runs.steps;
+  const memory = steps.findIndex((s) =>
+    (s.uses ?? "").startsWith("CVector-Energy/claude-code-memory@"),
+  );
+  const agent = steps.findIndex((s) =>
+    (s.uses ?? "").includes("claude-code-action"),
+  );
+  assert.ok(memory >= 0, "triage does not restore memory");
+  assert.ok(memory < agent, "memory is restored after the agent has run");
+});
+
+test("implement does not restore memory a second time", () => {
+  // It runs later in the same job as triage, which already restored the store.
+  // Extracting the cache again would overwrite memories the triage agent just
+  // wrote, and would register a second post-save racing the first for one key.
+  const again = ACTIONS.implement.runs.steps.some((s) =>
+    (s.uses ?? "").startsWith("CVector-Energy/claude-code-memory@"),
+  );
+  assert.equal(again, false);
+});

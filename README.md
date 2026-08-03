@@ -4,7 +4,7 @@ Two actions for the middle of an issue-solving workflow: **triage** an issue and
 
 | Action | What it does |
 |--------|--------------|
-| `CVector-Energy/claude-code-solve` | Resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
+| `CVector-Energy/claude-code-solve` | Restores the repo's Claude memory, resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
 | `CVector-Energy/claude-code-solve/implement` | Branches, renders the implement prompt, and runs an agent that continues the triage conversation |
 
 They are separate because what goes between them is yours: the toolchain install and any credentials the fix agent needs, which are worth skipping entirely when triage says there is nothing to fix.
@@ -29,11 +29,9 @@ jobs:
         with:
           token: ${{ steps.app.outputs.token }}
 
-      - uses: CVector-Energy/claude-code-memory@v0.1.0
-
       - name: Triage
         id: triage
-        uses: CVector-Energy/claude-code-solve@v0.1.0
+        uses: CVector-Energy/claude-code-solve@v0.2.0
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -47,7 +45,7 @@ jobs:
       - name: Implement
         id: implement
         if: steps.triage.outputs.disposition == 'fixable'
-        uses: CVector-Energy/claude-code-solve/implement@v0.1.0
+        uses: CVector-Energy/claude-code-solve/implement@v0.2.0
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -96,6 +94,14 @@ Outputs: `branch`, `session-id`, `execution-file`.
 Both actions render a template from your workspace rather than shipping one. The instructions that matter — which test runner, which conventions, what a good pull request body looks like — are repository-specific, and two real consumers of these actions share under a third of their prompt text.
 
 Triage substitutes `$REPO`, `$ISSUE_NUMBER` and `$ISSUE_BODY`; implement substitutes only `$ISSUE_NUMBER`, because the issue text is already in the conversation being resumed.
+
+## Memory And Sessions
+
+Both are restored for you; neither needs a step of your own.
+
+**Memory** — the repo-wide store from [claude-code-memory](https://github.com/CVector-Energy/claude-code-memory) — is restored by the triage action and saved by its post step at the end of your job. It is deliberately *not* restored again by `implement`: that action runs later in the same job, and extracting the cache a second time would overwrite memories the triage agent had just written. Using `implement` without `triage` therefore runs without memory.
+
+**The session** is scoped to `issue-<number>`, so a later run on the same issue continues the same conversation. `implement` continues triage's session rather than starting its own, via `resume-session-id`.
 
 ## What Stays In Your Workflow
 

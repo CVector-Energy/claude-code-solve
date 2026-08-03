@@ -53,6 +53,17 @@ outputs:
 runs:
   using: composite
   steps:
+    # Repo-wide knowledge, restored before the agent and saved by the action's own
+    # post step at the end of the job. Unlike the session below it is not scoped to
+    # this issue: what an agent learns about the repository is worth having on the
+    # next one.
+    #
+    # Restored here and not in the implement action, which runs later in the same
+    # job and would otherwise extract the cache a second time over a store this
+    # agent has already written to.
+    - name: Restore Claude Code memory
+      uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
     # Scoped to this issue, so a later run on it — a new comment, or a re-run
     # after a push — continues this conversation and nothing else. The action's
     # post step saves whatever session this job writes.
