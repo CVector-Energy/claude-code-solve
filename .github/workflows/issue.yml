@@ -1,0 +1,172 @@
+name: Issue solver
+
+# The whole middle of an issue-solving job. A caller supplies its triggers, its
+# permissions, a handful of conventions, and one local action for whatever
+# initialisation its language needs.
+#
+# `uses: ./.github/actions/agent-setup` below resolves against the runner's
+# workspace, which is the CALLER's checkout — not this repository. That is what
+# makes the callback protocol work, and it is why the checkout has to come first.
+# It also means the callback is the caller's code at the caller's ref, outside the
+# sha this workflow is pinned to.
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: GitHub App id whose token the agents act under.
+        required: true
+        type: string
+      triage-args:
+        description: >
+          Claude CLI arguments for triage. The --json-schema must produce `disposition` — one of "no-action", "needs-clarification", "fixable" — and a `summary`. Give triage no Bash: it runs before any initialisation, so it can neither build nor reach a cloud.
+        required: true
+        type: string
+      implement-args:
+        description: Claude CLI arguments for the implement agent.
+        required: false
+        type: string
+        default: '--dangerously-skip-permissions --model claude-opus-5'
+      git-user-name:
+        description: Name the fix branch's commits are authored under.
+        required: true
+        type: string
+      git-user-email:
+        description: Email the fix branch's commits are authored under.
+        required: true
+        type: string
+      allowed-bots:
+        description: Comma-separated bot logins whose comments may reach the agents.
+        required: false
+        type: string
+        default: ''
+      branch-prefix:
+        description: >
+          Prefix for the fix branch. Also what marks a pull request as the agent's, so the review-response workflow has to agree with this.
+        required: false
+        type: string
+        default: claude/issue-
+      success-label:
+        description: >
+          Label added to the issue once a pull request exists on the branch. Empty adds none.
+        required: false
+        type: string
+        default: ''
+      setup:
+        description: >
+          Whether to call `./.github/actions/agent-setup` in the caller before the implement agent. Turn it off for a repository that needs no initialisation — with it on and the action absent, the job fails at that step.
+        required: false
+        type: boolean
+        default: true
+      ignored-comment-authors:
+        description: >
+          JSON array of logins whose comments must not start a run. A mirrored bot comment is not a human asking for a fix.
+        required: false
+        type: string
+        default: '["github-actions[bot]"]'
+      runs-on:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      app-private-key:
+        description: Private key for the GitHub App.
+        required: true
+      anthropic-api-key:
+        description: Anthropic API key.
+        required: true
+
+jobs:
+  solve:
+    name: Issue
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    if: >
+      !github.event.issue.pull_request &&
+      !contains(github.event.issue.labels.*.name, 'no-autofix') &&
+      (
+        github.event.action == 'opened' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'claude-fix') ||
+        (github.event.action == 'created' &&
+         !contains(fromJSON(inputs.ignored-comment-authors), github.event.comment.user.login))
+      )
+    steps:
+      - name: Create GitHub App Token
+        id: app
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-workflows: write
+          permission-actions: read
+
+      # Removed in a post step when the job ends, pass or fail.
+      - name: React to the trigger
+        uses: CVector-Energy/claude-code-solve/reaction@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+
+      # Stop if a pull request is already open on the fix branch: the implement
+      # agent runs --dangerously-skip-permissions, and a force-push would discard
+      # whatever that pull request is carrying.
+      - name: Resolve the pull request
+        id: pr
+        uses: CVector-Energy/claude-code-solve/resolve-pr@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          branch-prefix: ${{ inputs.branch-prefix }}
+
+      # Persisted credentials so the agent can `git push` and `gh pr create`. This
+      # also puts the caller's `.github/actions` on disk, which the callback below
+      # is resolved from.
+      - name: Checkout the caller # zizmor: ignore[artipacked]
+        if: steps.pr.outputs.exists != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Triage the issue
+        id: triage
+        if: steps.pr.outputs.exists != 'true'
+        uses: CVector-Energy/claude-code-solve/triage@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          github-token: ${{ steps.app.outputs.token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          claude-args: ${{ inputs.triage-args }}
+          allowed-bots: ${{ inputs.allowed-bots }}
+          show-full-output: true
+
+      # The callback: the caller's own toolchain, credentials, services — whatever
+      # its language needs. Only a fixable issue pays for it, which is the point of
+      # keeping triage read-only.
+      - name: Set up the caller's toolchain
+        if: inputs.setup && steps.triage.outputs.disposition == 'fixable'
+        uses: ./.github/actions/agent-setup
+
+      - name: Implement the fix
+        id: implement
+        if: steps.triage.outputs.disposition == 'fixable'
+        uses: CVector-Energy/claude-code-solve/implement@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          branch: ${{ steps.pr.outputs.branch }}
+          github-token: ${{ steps.app.outputs.token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          resume-session-id: ${{ steps.triage.outputs.session-id }}
+          claude-args: ${{ inputs.implement-args }}
+          allowed-bots: ${{ inputs.allowed-bots }}
+          show-full-output: true
+          git-user-name: ${{ inputs.git-user-name }}
+          git-user-email: ${{ inputs.git-user-email }}
+          success-label: ${{ inputs.success-label }}

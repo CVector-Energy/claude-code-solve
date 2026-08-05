@@ -393,3 +393,94 @@ test("implement will not claim a pull request that does not exist", () => {
   );
   assert.ok(agentAt < labelAt, "the label comes after the agent that earns it");
 });
+
+// ─── reusable workflows ──────────────────────────────────────────────────────
+
+const REUSABLE = {
+  issue: ".github/workflows/issue.yml",
+  "pr-review-response": ".github/workflows/pr-review-response.yml",
+};
+const workflow = (which) => parse(fs.readFileSync(REUSABLE[which], "utf8"));
+// `on:` is YAML 1.1's boolean true.
+const callable = (which) => {
+  const w = workflow(which);
+  return (w.on ?? w[true]).workflow_call;
+};
+const jobOf = (which) => Object.values(workflow(which).jobs)[0];
+
+for (const which of Object.keys(REUSABLE)) {
+  test(`${which}: it is callable, and asks for the secrets it cannot read`, () => {
+    const call = callable(which);
+    assert.ok(call, "not a reusable workflow");
+    for (const secret of ["app-private-key", "anthropic-api-key"]) {
+      assert.equal(call.secrets[secret].required, true, secret);
+    }
+    // A caller passing these as inputs would put them in plain sight.
+    assert.equal(call.inputs["app-private-key"], undefined);
+    assert.equal(call.inputs["anthropic-api-key"], undefined);
+  });
+
+  test(`${which}: the callback comes after the checkout that puts it on disk`, () => {
+    // `uses: ./` resolves against the runner's workspace, which is the caller's
+    // checkout — proven by probe, not assumed. Before the checkout there is
+    // nothing there to resolve.
+    const steps = jobOf(which).steps;
+    const checkout = steps.findIndex((s) => (s.uses ?? "").includes("actions/checkout"));
+    const callback = steps.findIndex((s) => (s.uses ?? "").startsWith("./"));
+    assert.ok(checkout >= 0 && callback >= 0);
+    assert.ok(checkout < callback, "the callback would resolve against nothing");
+  });
+
+  test(`${which}: the callback is one documented path, and can be declined`, () => {
+    // `uses:` cannot be an expression, so the protocol is the path itself.
+    const step = jobOf(which).steps.find((s) => (s.uses ?? "").startsWith("./"));
+    assert.equal(step.uses, "./.github/actions/agent-setup");
+    assert.ok(String(step.if).includes("inputs.setup"));
+    assert.equal(callable(which).inputs.setup.default, true);
+  });
+
+  test(`${which}: every shared action is pinned to one commit`, () => {
+    const refs = jobOf(which)
+      .steps.filter((s) => (s.uses ?? "").includes("claude-code-solve/"))
+      .map((s) => s.uses.split("@")[1]);
+    assert.ok(refs.length > 0);
+    assert.equal(new Set(refs).size, 1);
+    assert.match(refs[0], /^[0-9a-f]{40}$/);
+  });
+
+  test(`${which}: it declares the permissions its own steps need`, () => {
+    // A caller cannot grant more than it holds, but a reusable workflow that
+    // declares nothing inherits nothing.
+    const permissions = jobOf(which).permissions;
+    assert.equal(permissions["contents"], "write");
+    assert.equal(permissions["id-token"], "write");
+  });
+}
+
+test("the issue workflow keeps triage off the toolchain it has not set up yet", () => {
+  // The callback runs after triage, so triage cannot depend on it. That is the
+  // whole reason a no-action issue costs nothing.
+  const steps = jobOf("issue").steps;
+  const triage = steps.findIndex((s) => (s.uses ?? "").includes("/triage@"));
+  const callback = steps.findIndex((s) => (s.uses ?? "").startsWith("./"));
+  assert.ok(triage < callback);
+  assert.ok(
+    String(steps[callback].if).includes("disposition == 'fixable'"),
+    "an issue with nothing to fix should not pay for an install",
+  );
+});
+
+test("the branch prefix has one home across both workflows", () => {
+  // It named the fix branch, gated the review workflow's job, and defaulted inside
+  // implement. One input now, and resolve-pr is told it.
+  for (const which of Object.keys(REUSABLE)) {
+    assert.equal(callable(which).inputs["branch-prefix"].default, "claude/issue-");
+    const resolve = jobOf(which).steps.find((s) => (s.uses ?? "").includes("/resolve-pr@"));
+    assert.equal(resolve.with["branch-prefix"], "${{ inputs.branch-prefix }}");
+  }
+  // The review workflow's job gate is the one place it is read directly, and it
+  // reads the same input rather than a literal.
+  const gate = jobOf("pr-review-response").if;
+  assert.ok(gate.includes("inputs.branch-prefix"));
+  assert.ok(!gate.includes("claude/issue-"));
+});

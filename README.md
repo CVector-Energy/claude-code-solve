@@ -1,6 +1,64 @@
-# Claude Code Solve Actions
+# Claude Code Solve
 
-Two actions for the middle of an issue-solving workflow: **triage** an issue and report a disposition, then **implement** the fix it planned. Everything specific to your repository — the toolchain, the verification gates, the prompts, the commit identity — stays in your workflow.
+Reusable workflows for driving Claude Code through a GitHub issue, and the actions they are built from.
+
+## Reusable workflows
+
+| Workflow | What it does |
+|----------|--------------|
+| `…/claude-code-solve/.github/workflows/issue.yml` | Triage an issue, and on a fixable one branch and implement the fix |
+| `…/claude-code-solve/.github/workflows/pr-review-response.yml` | Answer a review on a pull request the agent owns |
+
+A caller supplies its triggers, its permissions, a few conventions, and **one local action** for language-specific initialisation:
+
+```yaml
+name: Issue
+on:
+  issues: { types: [opened, labeled] }
+  issue_comment: { types: [created] }
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+concurrency:
+  group: solve-issue-${{ github.event.issue.number }}
+jobs:
+  solve:
+    uses: CVector-Energy/claude-code-solve/.github/workflows/issue.yml@<sha>
+    with:
+      app-id: ${{ vars.APP_ID }}
+      triage-args: ${{ ... }}
+      git-user-name: my-bot[bot]
+      git-user-email: 12345+my-bot[bot]@users.noreply.github.com
+      success-label: claude-pr-created
+    secrets:
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Triggers, `permissions` and `concurrency` cannot be delegated — a called workflow declares none of them, and a caller cannot grant more than it holds.
+
+## The callback protocol
+
+Each workflow calls **`./.github/actions/agent-setup`** in the caller, after the checkout and only on the path that needs it. Put whatever the repository needs to build behind that name — a toolchain, a service, cloud credentials. It is an ordinary composite action, so it may `uses:` anything.
+
+```yaml
+# .github/actions/agent-setup/action.yml in your repository
+name: 'Agent setup'
+description: Everything the fix agent needs before it can build or test.
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-uv   # or setup-node, a service, a role…
+```
+
+`uses: ./…` inside a reusable workflow resolves against the **runner's workspace**, which is the caller's checkout — not this repository. Two consequences: the checkout has to come first (it does), and the callback is the caller's code at the caller's ref, outside the sha the workflow is pinned to. Pass `setup: false` for a repository that needs no initialisation; with it left on and the action absent, the job fails at that step.
+
+Because the callback runs *after* triage, an issue triaged `no-action` never pays for an install. That is why triage is given no `Bash`.
+
+## Actions
 
 | Action | What it does |
 |--------|--------------|

@@ -1,0 +1,156 @@
+name: PR review response
+
+# Answers a review on a pull request the agent owns. Same callback protocol as the
+# issue solver: `./.github/actions/agent-setup` resolves against the caller's
+# checkout, so initialisation stays with the repository that knows what it needs.
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: GitHub App id whose token the agent acts under.
+        required: true
+        type: string
+      respond-args:
+        description: >
+          Claude CLI arguments. The --json-schema must produce `summary`, and may produce `inline_replies`, `rerequest_reviewers` and `out_of_scope`.
+        required: true
+        type: string
+      git-user-name:
+        description: Name the agent's commits are authored under.
+        required: true
+        type: string
+      git-user-email:
+        description: Email the agent's commits are authored under.
+        required: true
+        type: string
+      allowed-bots:
+        description: >
+          Comma-separated bot logins whose comments may reach the agent. Review bots belong here; the ones that merely mirror belong in `ignored-review-authors`.
+        required: false
+        type: string
+        default: ''
+      branch-prefix:
+        description: >
+          What marks a pull request as the agent's. Used to skip the job early and checked again by resolve-pr, so a review on someone else's branch costs nothing.
+        required: false
+        type: string
+        default: claude/issue-
+      setup:
+        description: >
+          Whether to call `./.github/actions/agent-setup` in the caller before the agent.
+        required: false
+        type: boolean
+        default: true
+      ignored-review-authors:
+        description: JSON array of logins whose reviews and comments must not start a run.
+        required: false
+        type: string
+        default: '["github-actions[bot]"]'
+      commit-message:
+        description: Message for the commit holding the agent's edits.
+        required: false
+        type: string
+        default: 'fix(review): address reviewer feedback'
+      runs-on:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      app-private-key:
+        description: Private key for the GitHub App.
+        required: true
+      anthropic-api-key:
+        description: Anthropic API key.
+        required: true
+
+jobs:
+  respond:
+    name: Respond to review
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    # The branch prefix is checked here so a review on an unrelated pull request
+    # never mints an App token to discover that. resolve-pr checks it again from
+    # the pull request itself, which is the authoritative answer; this is the cheap
+    # one, and it is the only place the prefix has to be named twice — both from the
+    # same input.
+    if: >
+      (
+        (github.event_name == 'pull_request_review' &&
+         startsWith(github.event.pull_request.head.ref, inputs.branch-prefix) &&
+         github.event.review.state != 'approved' &&
+         !contains(fromJSON(inputs.ignored-review-authors), github.event.review.user.login)
+        ) ||
+        (github.event_name == 'pull_request_review_comment' &&
+         startsWith(github.event.pull_request.head.ref, inputs.branch-prefix) &&
+         !contains(fromJSON(inputs.ignored-review-authors), github.event.comment.user.login)
+        ) ||
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request != null &&
+         !contains(fromJSON(inputs.ignored-review-authors), github.event.comment.user.login)
+        )
+      )
+    steps:
+      - name: Create GitHub App Token
+        id: app
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-workflows: write
+          permission-actions: read
+
+      - name: React to the trigger
+        uses: CVector-Energy/claude-code-solve/reaction@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+
+      # An `issue_comment` reaches here for any pull request, so this is where a
+      # branch the agent does not own is actually ruled out.
+      - name: Resolve the pull request
+        id: pr
+        uses: CVector-Energy/claude-code-solve/resolve-pr@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          branch-prefix: ${{ inputs.branch-prefix }}
+
+      # No persisted credentials: the respond action pushes over an explicitly
+      # authenticated URL. Full history so the agent can rebase.
+      - name: Checkout the pull request branch
+        if: steps.pr.outputs.managed == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the caller's toolchain
+        if: inputs.setup && steps.pr.outputs.managed == 'true'
+        uses: ./.github/actions/agent-setup
+
+      - name: Respond to the review
+        if: steps.pr.outputs.managed == 'true'
+        uses: CVector-Energy/claude-code-solve/respond@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        with:
+          pr-number: ${{ steps.pr.outputs.number }}
+          head-ref: ${{ steps.pr.outputs.branch }}
+          base-ref: ${{ steps.pr.outputs.base-ref }}
+          github-token: ${{ steps.app.outputs.token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          claude-args: ${{ inputs.respond-args }}
+          allowed-bots: ${{ inputs.allowed-bots }}
+          show-full-output: true
+          git-user-name: ${{ inputs.git-user-name }}
+          git-user-email: ${{ inputs.git-user-email }}
+          commit-message: ${{ inputs.commit-message }}
