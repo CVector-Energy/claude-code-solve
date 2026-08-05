@@ -8,6 +8,7 @@ Two actions for the middle of an issue-solving workflow: **triage** an issue and
 | `…/claude-code-solve/reaction` | Reacts to whatever triggered the run, and takes the reaction back when the job ends — no cleanup step of your own |
 | `…/claude-code-solve/triage` | Restores the repo's Claude memory, resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
 | `…/claude-code-solve/implement` | Branches, renders the implement prompt, and runs an agent that continues the triage conversation |
+| `…/claude-code-solve/fix-ci` | Hands a failed CI run's logs to an agent on the pull request's branch and pushes the fix, with a bounded number of attempts |
 | `…/claude-code-solve/respond` | Answers a pull request review: resumes the PR's session, runs the agent, pushes its edits and posts its replies |
 
 Every action is a subdirectory; there is no action at the root.

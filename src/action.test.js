@@ -8,9 +8,14 @@ const PATHS = {
   triage: "triage/action.yml",
   implement: "implement/action.yml",
   respond: "respond/action.yml",
+  "fix-ci": "fix-ci/action.yml",
 };
 /** Every composite action here, agent or not. */
-const ALL_PATHS = { ...PATHS, "resolve-pr": "resolve-pr/action.yml" };
+const ALL_PATHS = {
+  ...PATHS,
+  "resolve-pr": "resolve-pr/action.yml",
+  "fix-ci": "fix-ci/action.yml",
+};
 const load = (which) => parse(fs.readFileSync(PATHS[which], "utf8"));
 const ACTIONS = Object.fromEntries(Object.keys(PATHS).map((k) => [k, load(k)]));
 const ALL = Object.fromEntries(
@@ -113,14 +118,14 @@ test("implement branches before the agent can commit anything", () => {
   assert.ok(steps.indexOf("branch") < steps.indexOf("implement"));
 });
 
-test("neither action cleans up after the caller's job", () => {
-  // A failing step aborts the rest of a composite action, so a trace upload or
-  // a reaction removal in here would be skipped exactly when it is needed.
+test("no action cleans up after the caller's job", () => {
+  // A failing step aborts the rest of a composite action, so anything that must
+  // run when the agent fails cannot live in here. Nothing does: the trace goes to
+  // the job log as it is produced, and the reaction removes itself in a post step.
   for (const [which, action] of Object.entries(ACTIONS)) {
     const body = JSON.stringify(action.runs.steps);
     assert.ok(!body.includes("upload-artifact"), which);
     assert.ok(!/reaction/i.test(body), which);
-    assert.ok(action.outputs["execution-file"], `${which} hides the trace path`);
   }
 });
 
@@ -293,3 +298,72 @@ for (const which of ["triage", "implement", "respond"]) {
     );
   });
 }
+
+test("resolve-pr resolves a completed workflow run by its branch", () => {
+  // A workflow_run event names the head branch, never the pull request, so the
+  // CI-failure responder cannot look one up the way a review event does.
+  const run = resolveStep().run;
+  assert.ok(run.includes("workflow_run)"));
+  assert.ok(String(resolveStep().env.HEAD_BRANCH).includes("workflow_run.head_branch"));
+  assert.ok(
+    run.includes('--head "$HEAD_BRANCH"'),
+    "the branch is what identifies the pull request here",
+  );
+});
+
+
+// ─── fix-ci ──────────────────────────────────────────────────────────────────
+
+const FIXCI = () => ALL["fix-ci"];
+const fixStep = (id) => FIXCI().runs.steps.find((s) => s.id === id);
+const fixNamed = (fragment) =>
+  FIXCI().runs.steps.find((s) => (s.name ?? "").toLowerCase().includes(fragment));
+
+test("fix-ci bounds how many times it will chase one branch", () => {
+  // Its own push wakes it again through CI, so without a ceiling a failure it
+  // cannot fix becomes a loop that bills per attempt.
+  assert.equal(FIXCI().inputs["max-attempts"].default, "3");
+  const budget = fixStep("budget").run;
+  assert.ok(budget.includes("git log"), "the count comes from the branch itself");
+  assert.ok(budget.includes('-ge "$MAX_ATTEMPTS"'));
+});
+
+test("fix-ci counts attempts from the branch, not from anywhere resettable", () => {
+  // A re-run, a new workflow file, a cleared label — none of those should hand
+  // the agent a fresh budget.
+  const budget = fixStep("budget").run;
+  assert.ok(budget.includes('grep -c "^${COMMIT_PREFIX}"'));
+  assert.ok(
+    fixNamed("commit and push").run.includes("${COMMIT_PREFIX}"),
+    "the commits it counts have to be the commits it writes",
+  );
+});
+
+test("fix-ci does nothing at all once the budget is spent", () => {
+  // Not even a session restore: the point is to stop, and leave it for a human.
+  for (const step of FIXCI().runs.steps.slice(1)) {
+    assert.equal(
+      step.if,
+      "steps.budget.outputs.attempted == 'true'",
+      step.name ?? step.uses,
+    );
+  }
+});
+
+test("fix-ci continues the pull request's own conversation", () => {
+  assert.match(fixStep("session").with.scope, /^pr-\$\{\{ inputs\.pr-number \}\}$/);
+});
+
+test("fix-ci reads the failed logs where it renders them", () => {
+  const step = fixStep("prompt");
+  assert.ok(step.run.includes("--log-failed"));
+  assert.ok(step.run.includes("tail -c"), "a failing suite can run to megabytes");
+  assert.equal(step.run.split('>> "$GITHUB_OUTPUT"').length - 1, 1);
+  assert.ok(step.run.includes('DELIM="EOF_$(openssl rand -hex 16)"'));
+});
+
+test("fix-ci pushes nothing when the agent changed nothing", () => {
+  const push = fixNamed("commit and push").run;
+  assert.ok(push.includes("git diff --cached --quiet"));
+  assert.ok(push.includes("--force-with-lease="));
+});

@@ -48,6 +48,7 @@ runs:
         BRANCH_PREFIX: ${{ inputs.branch-prefix }}
         EVENT_NAME: ${{ github.event_name }}
         PR_FROM_PULL: ${{ github.event.pull_request.number }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         ISSUE_NUMBER: ${{ github.event.issue.number }}
         ISSUE_IS_PULL_REQUEST: ${{ github.event.issue.pull_request.url }}
       run: |
@@ -64,6 +65,13 @@ runs:
           issue_comment)
             if [ -n "$ISSUE_IS_PULL_REQUEST" ]; then PR="$ISSUE_NUMBER"; else PR=""; fi
             ;;
+          workflow_run)
+            # A completed run names its branch, not its pull request.
+            if ! PR=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --json number -q '.[0].number'); then
+              echo "Could not list pull requests for $HEAD_BRANCH." >&2
+              exit 1
+            fi
+            ;;
           *)
             PR=""
             ;;
@@ -77,6 +85,11 @@ runs:
           BRANCH=$(printf '%s' "$META" | jq -r '.headRefName')
           BASE_REF=$(printf '%s' "$META" | jq -r '.baseRefName')
           EXISTS=true
+        elif [ "$EVENT_NAME" = "workflow_run" ]; then
+          # A run on a branch with no open pull request: nothing to respond to.
+          BRANCH="$HEAD_BRANCH"
+          BASE_REF=""
+          EXISTS=false
         else
           # An issue: the branch a fix would use, which may or may not have a
           # pull request open on it already.

@@ -1,0 +1,188 @@
+name: 'Claude Code CI failure response'
+description: >
+  Hand a failed CI run's logs to Claude Code on the pull request's own branch, and push the fix. Meant for a `workflow_run` trigger, so CI is the verifier rather than a check repeated inside the solver.
+
+inputs:
+  pr-number:
+    description: The pull request whose branch failed CI.
+    required: true
+  branch:
+    description: The branch to fix and push to — the pull request's head ref.
+    required: true
+  run-id:
+    description: The failed CI run whose logs the agent is given.
+    required: true
+  github-token:
+    description: Token for git and gh; needs contents:write and actions:read.
+    required: true
+  anthropic-api-key:
+    description: Anthropic API key. A composite action cannot read the caller's secrets.
+    required: true
+  claude-args:
+    description: Arguments for the Claude CLI — model and tool allowlist.
+    required: true
+  git-user-name:
+    description: Name to commit the fix under.
+    required: true
+  git-user-email:
+    description: Email to commit the fix under.
+    required: true
+  max-attempts:
+    description: >
+      How many times the agent may chase one branch's CI before giving up. Each attempt pushes a commit whose subject carries `commit-prefix`, and those are what get counted — so the ceiling survives a re-run, and a branch cannot loop forever on a failure the agent cannot fix.
+    required: false
+    default: '3'
+  commit-prefix:
+    description: Subject prefix for the agent's commits, and what identifies a previous attempt.
+    required: false
+    default: 'fix(ci):'
+  prompt-template:
+    description: >
+      Template rendered into the prompt. `$PR_NUMBER`, `$BRANCH`, `$RUN_ID` and `$FAILED_LOG` are substituted; nothing else is.
+    required: false
+    default: .github/prompts/ci-failure.md
+  allowed-bots:
+    description: Comma-separated bot logins whose comments may reach the agent, or "*".
+    required: false
+    default: ''
+  show-full-output:
+    description: Echo Claude's full JSON output into the job log.
+    required: false
+    default: 'false'
+
+outputs:
+  attempted:
+    description: '"true" when an agent ran. "false" when the attempt ceiling was already reached.'
+    value: ${{ steps.budget.outputs.attempted }}
+  attempts:
+    description: How many attempts this branch had already made, before this run.
+    value: ${{ steps.budget.outputs.attempts }}
+  session-id:
+    description: The session this run wrote.
+    value: ${{ steps.agent.outputs.session_id }}
+
+runs:
+  using: composite
+  steps:
+    # An agent that cannot fix a failure will push, fail CI, and be woken by its
+    # own push. Counting its previous commits bounds that without any state
+    # outside the branch, so a re-run cannot reset the budget.
+    - name: Check the attempt budget
+      id: budget
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        COMMIT_PREFIX: ${{ inputs.commit-prefix }}
+      run: |
+        set -euo pipefail
+        ATTEMPTS=$(git log --format='%s' "origin/${BRANCH}" | grep -c "^${COMMIT_PREFIX}" || true)
+        echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
+        if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
+          echo "attempted=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::$ATTEMPTS attempts already made on $BRANCH; leaving this one for a human."
+        else
+          echo "attempted=true" >> "$GITHUB_OUTPUT"
+          echo "Attempt $((ATTEMPTS + 1)) of $MAX_ATTEMPTS on $BRANCH."
+        fi
+
+    - name: Restore Claude Code memory
+      if: steps.budget.outputs.attempted == 'true'
+      uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
+    # Same scope as the review response: this is the same conversation about the
+    # same pull request, continued after CI had its say.
+    - name: Restore Claude session
+      id: session
+      if: steps.budget.outputs.attempted == 'true'
+      uses: CVector-Energy/claude-code-session@f6eb26ff2567feaf7df3f2cf0d4a6d64e0123656 # v0.1.1
+      with:
+        scope: pr-${{ inputs.pr-number }}
+
+    - name: Configure git
+      if: steps.budget.outputs.attempted == 'true'
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+
+    # Fetched and rendered in one step, so the log — which carries file contents
+    # and error text from a build — stays a shell variable rather than becoming a
+    # step output a fixed heredoc delimiter could be terminated inside.
+    - name: Render prompt
+      id: prompt
+      if: steps.budget.outputs.attempted == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BRANCH: ${{ inputs.branch }}
+        RUN_ID: ${{ inputs.run-id }}
+        TEMPLATE: ${{ inputs.prompt-template }}
+      run: |
+        set -euo pipefail
+        if ! FAILED_LOG=$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>&1); then
+          echo "Could not read the failed logs for run $RUN_ID." >&2
+          exit 1
+        fi
+        # Tail it: a failing suite can run to megabytes, and the end is the part
+        # that says what broke.
+        FAILED_LOG=$(printf '%s' "$FAILED_LOG" | tail -c 60000)
+        export FAILED_LOG
+        # Random per run: untrusted text must not be able to terminate its own value.
+        DELIM="EOF_$(openssl rand -hex 16)"
+        {
+          echo "body<<$DELIM"
+          envsubst '$PR_NUMBER $BRANCH $RUN_ID $FAILED_LOG' < "$TEMPLATE"
+          echo "$DELIM"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Fix the failure
+      id: agent
+      if: steps.budget.outputs.attempted == 'true'
+      uses: anthropics/claude-code-action@e0cf66d1d257526b5d07f141838c338921cb8455 # v1.0.182
+      with:
+        allowed_bots: ${{ inputs.allowed-bots }}
+        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        claude_args: |
+          ${{ inputs.claude-args }}
+          ${{ steps.session.outputs.resume-args }}
+        github_token: ${{ inputs.github-token }}
+        show_full_output: ${{ inputs.show-full-output }}
+        prompt: ${{ steps.prompt.outputs.body }}
+
+    - name: Commit and push the fix
+      if: steps.budget.outputs.attempted == 'true'
+      shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        COMMIT_PREFIX: ${{ inputs.commit-prefix }}
+        RUN_ID: ${{ inputs.run-id }}
+      run: |
+        set -euo pipefail
+        REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+
+        git add -A
+        if git diff --cached --quiet; then
+          echo "The agent changed nothing; there is nothing to push."
+          exit 0
+        fi
+        # The subject is what the attempt budget counts, so the prefix is not
+        # cosmetic.
+        git commit -m "${COMMIT_PREFIX} address CI failure in run ${RUN_ID}"
+
+        REMOTE_SHA=$(git ls-remote "$REMOTE" "refs/heads/${BRANCH}" | awk '{print $1}')
+        git push \
+          --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" \
+          "$REMOTE" "HEAD:${BRANCH}"
+
+branding:
+  icon: refresh-cw
+  color: orange
