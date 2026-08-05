@@ -278,3 +278,18 @@ test("implement takes the branch rather than spelling the prefix again", () => {
     "implement still hardcodes a branch name",
   );
 });
+
+for (const which of ["triage", "implement", "respond"]) {
+  test(`${which}: the trace can be echoed into the log`, () => {
+    // The workflows read traces out of the log now — see .agents/skills/agent-trace
+    // — rather than uploading an artifact, so every agent has to be able to emit it.
+    assert.equal(ACTIONS[which].inputs["show-full-output"].default, "false");
+    const agent = ACTIONS[which].runs.steps.find((s) =>
+      (s.uses ?? "").includes("claude-code-action"),
+    );
+    assert.equal(
+      agent.with.show_full_output.trim(),
+      "${{ inputs.show-full-output }}",
+    );
+  });
+}

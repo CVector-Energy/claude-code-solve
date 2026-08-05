@@ -26,6 +26,11 @@ inputs:
     description: Comma-separated bot logins whose comments may reach the agent, or "*". Empty allows none.
     required: false
     default: ''
+  show-full-output:
+    description: >
+      Echo Claude's full JSON output into the job log. The workflows use this instead of uploading a trace artifact: the log keeps the repository's retention rather than an artifact's, and `.agents/skills/agent-trace` extracts it. It contains every tool result, so only turn it on where those cannot carry a secret.
+    required: false
+    default: 'false'
   git-user-name:
     description: Name the fix branch's commits are authored under.
     required: true
@@ -96,6 +101,7 @@ runs:
           ${{ inputs.claude-args }}
           ${{ inputs.resume-session-id && format('--resume {0}', inputs.resume-session-id) || '' }}
         github_token: ${{ inputs.github-token }}
+        show_full_output: ${{ inputs.show-full-output }}
         prompt: ${{ steps.prompt.outputs.body }}
 
     # Every agent in a job writes to the same $RUNNER_TEMP/claude-execution-output.json,
