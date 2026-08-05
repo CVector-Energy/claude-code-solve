@@ -4,8 +4,12 @@ Two actions for the middle of an issue-solving workflow: **triage** an issue and
 
 | Action | What it does |
 |--------|--------------|
-| `CVector-Energy/claude-code-solve` | Restores the repo's Claude memory, resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
-| `CVector-Energy/claude-code-solve/implement` | Branches, renders the implement prompt, and runs an agent that continues the triage conversation |
+| `…/claude-code-solve/reaction` | Reacts to whatever triggered the run, and takes the reaction back when the job ends — no cleanup step of your own |
+| `…/claude-code-solve/triage` | Restores the repo's Claude memory, resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
+| `…/claude-code-solve/implement` | Branches, renders the implement prompt, and runs an agent that continues the triage conversation |
+| `…/claude-code-solve/respond` | Answers a pull request review: resumes the PR's session, runs the agent, pushes its edits and posts its replies |
+
+Every action is a subdirectory; there is no action at the root.
 
 They are separate because what goes between them is yours: the toolchain install and any credentials the fix agent needs, which are worth skipping entirely when triage says there is nothing to fix.
 
@@ -29,9 +33,15 @@ jobs:
         with:
           token: ${{ steps.app.outputs.token }}
 
+      # One step. The reaction is removed by this action's post step when the job
+      # ends, pass or fail.
+      - uses: CVector-Energy/claude-code-solve/reaction@v1.0.0
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+
       - name: Triage
         id: triage
-        uses: CVector-Energy/claude-code-solve@v0.2.0
+        uses: CVector-Energy/claude-code-solve/triage@v1.0.0
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -45,7 +55,7 @@ jobs:
       - name: Implement
         id: implement
         if: steps.triage.outputs.disposition == 'fixable'
-        uses: CVector-Energy/claude-code-solve/implement@v0.2.0
+        uses: CVector-Energy/claude-code-solve/implement@v1.0.0
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -120,7 +130,8 @@ Pin by full commit sha. These actions carry an API key and a write-scoped token,
 
 ```sh
 npm install
-npm test    # node --test over src/*.test.js — action wiring, no runtime
+npm run build   # bundle the reaction action into reaction/dist
+npm test        # node --test — action wiring and the reaction endpoint logic
 ```
 
 ## License

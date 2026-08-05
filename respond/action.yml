@@ -1,0 +1,249 @@
+name: 'Claude Code review response'
+description: >
+  Answer a pull request review with Claude Code: resume the PR's session, render the prompt, run the agent, push its edits and post its replies.
+
+inputs:
+  pr-number:
+    description: Number of the pull request being reviewed.
+    required: true
+  head-ref:
+    description: Branch the pull request is from. The agent's edits are pushed here.
+    required: true
+  base-ref:
+    description: Branch the pull request targets, fetched so the agent can rebase.
+    required: true
+  github-token:
+    description: >
+      Token for git and gh. Needs contents:write and pull-requests:write; usually a GitHub App token minted by the calling job.
+    required: true
+  anthropic-api-key:
+    description: Anthropic API key. A composite action cannot read the caller's secrets.
+    required: true
+  claude-args:
+    description: >
+      Arguments for the Claude CLI — model, tool allowlist and the --json-schema whose fields this action posts. The schema must produce `summary`, and may produce `inline_replies`, `rerequest_reviewers` and `out_of_scope`.
+    required: true
+  git-user-name:
+    description: Name to commit the agent's edits under.
+    required: true
+  git-user-email:
+    description: Email to commit the agent's edits under.
+    required: true
+  allowed-bots:
+    description: Comma-separated bot logins whose comments may reach the agent, or "*". Empty allows none.
+    required: false
+    default: ''
+  prompt-template:
+    description: >
+      Template rendered into the agent's prompt, relative to the workspace. `$REPO`, `$PR_NUMBER`, `$BRANCH`, `$BASE_REF` and `$REVIEW_CONTEXT` are substituted; nothing else is.
+    required: false
+    default: .github/prompts/pr-review-response.md
+  commit-message:
+    description: Message for the commit holding the agent's edits.
+    required: false
+    default: 'fix(review): address reviewer feedback'
+
+outputs:
+  session-id:
+    description: The session this run wrote, for a trace or for a later resume.
+    value: ${{ steps.respond.outputs.session_id }}
+  structured-output:
+    description: The JSON the agent returned.
+    value: ${{ steps.respond.outputs.structured_output }}
+  execution-file:
+    description: Path to the execution log, for the caller to upload as a trace artifact.
+    value: ${{ steps.trace.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    # Repo-wide knowledge, restored before the agent and saved by the action's own
+    # post step at the end of the job. Unlike the session below it is not scoped to
+    # this pull request: what an agent learns about the repository is worth having
+    # on the next one.
+    - name: Restore Claude Code memory
+      uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
+    - name: Configure git
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      run: |
+        set -euo pipefail
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+
+    # Support "git rebase". A checkout with persist-credentials: false leaves the
+    # origin remote without a token, so fetch over an explicitly authenticated URL
+    # — the same pattern the push below uses.
+    - name: Fetch base branch
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        git fetch --no-tags "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
+          "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+    # Scoped to this pull request, so the next review round continues this
+    # conversation and nothing else. The action's post step saves whatever session
+    # this job writes, so there is no companion step at the end.
+    #
+    # Actions cache scope follows GITHUB_REF and the review triggers do not share
+    # one: pull_request_review* run under refs/pull/N/merge, issue_comment under
+    # the default branch. A run that cannot read the other family's entry starts
+    # fresh and says so in the log.
+    - name: Restore Claude session
+      id: session
+      uses: CVector-Energy/claude-code-session@f6eb26ff2567feaf7df3f2cf0d4a6d64e0123656 # v0.1.1
+      with:
+        scope: pr-${{ inputs.pr-number }}
+
+    # Fetched and rendered in one step, so the review text stays a shell variable
+    # until it is inside the prompt rather than crossing a step boundary as an
+    # output, where a fixed heredoc delimiter would let it terminate its own value.
+    - name: Render prompt
+      id: prompt
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BRANCH: ${{ inputs.head-ref }}
+        BASE_REF: ${{ inputs.base-ref }}
+        TEMPLATE: ${{ inputs.prompt-template }}
+      run: |
+        set -euo pipefail
+        CONTEXT=$(
+          gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json title,body,comments,reviews \
+            --jq '"# " + .title + "\n\n" + (.body // "") + "\n\n## Issue comments\n\n" + ([.comments[] | "---\n**" + .author.login + ":**\n\n" + .body] | join("\n\n")) + "\n\n## Reviews\n\n" + ([.reviews[] | "---\n**" + .author.login + " (" + .state + "):**\n\n" + (.body // "")] | join("\n\n"))'
+        )
+        INLINE=$(
+          gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
+            --jq '[.[] | "---\n**" + .user.login + "** on `" + .path + "` line " + ((.line // .original_line) | tostring) + " (comment id: " + (.id | tostring) + "):\n\n" + .body] | join("\n\n")'
+        )
+        REVIEW_CONTEXT=$(
+          printf '%s\n\n## Inline review comments\n\n%s\n' "$CONTEXT" "$INLINE"
+        )
+        export REVIEW_CONTEXT
+        # Random per run: untrusted text must not be able to terminate its own value.
+        DELIM="EOF_$(openssl rand -hex 16)"
+        {
+          echo "body<<$DELIM"
+          envsubst '$REPO $PR_NUMBER $BRANCH $BASE_REF $REVIEW_CONTEXT' < "$TEMPLATE"
+          echo "$DELIM"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Respond to review
+      id: respond
+      uses: anthropics/claude-code-action@e0cf66d1d257526b5d07f141838c338921cb8455 # v1.0.182
+      with:
+        allowed_bots: ${{ inputs.allowed-bots }}
+        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        claude_args: |
+          ${{ inputs.claude-args }}
+          ${{ steps.session.outputs.resume-args }}
+        github_token: ${{ inputs.github-token }}
+        prompt: ${{ steps.prompt.outputs.body }}
+
+    # Every agent in a job writes to the same $RUNNER_TEMP/claude-execution-output.json,
+    # so another one would overwrite this log before the caller can upload it. Copy
+    # it aside under a name of our own, and do it even when the agent failed — that
+    # is the trace someone will actually want to read.
+    - name: Preserve the execution log
+      id: trace
+      if: always()
+      shell: bash
+      env:
+        SOURCE: ${{ steps.respond.outputs.execution_file }}
+      run: |
+        set -euo pipefail
+        DEST="$RUNNER_TEMP/claude-trace-respond.json"
+        if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+          cp "$SOURCE" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Commit and push agent edits
+      shell: bash
+      env:
+        HEAD_REF: ${{ inputs.head-ref }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      run: |
+        set -euo pipefail
+        REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+
+        # Commit any uncommitted edits the agent left in the working tree.
+        git add -A
+        if ! git diff --cached --quiet; then
+          git commit -m "$COMMIT_MESSAGE"
+        fi
+
+        # Compare the local branch with the remote. This catches both new commits
+        # and a rebase that rewrote existing history.
+        REMOTE_SHA=$(git ls-remote "$REMOTE" "refs/heads/${HEAD_REF}" | awk '{print $1}')
+        LOCAL_SHA=$(git rev-parse HEAD)
+        if [ "$REMOTE_SHA" = "$LOCAL_SHA" ]; then
+          echo "Branch already up to date on remote; nothing to push"
+          exit 0
+        fi
+
+        git push \
+          --force-with-lease="refs/heads/${HEAD_REF}:${REMOTE_SHA}" \
+          "$REMOTE" "HEAD:${HEAD_REF}"
+
+    - name: Post comments and re-request review
+      if: steps.respond.outputs.structured_output
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        STRUCTURED_OUTPUT: ${{ steps.respond.outputs.structured_output }}
+      run: |
+        set -euo pipefail
+
+        SUMMARY=$(echo "$STRUCTURED_OUTPUT" | jq -r '.summary // ""')
+        OUT_OF_SCOPE=$(echo "$STRUCTURED_OUTPUT" | jq -r '(.out_of_scope // []) | map("- " + .) | join("\n")')
+
+        BODY="$SUMMARY"
+        if [ -n "$OUT_OF_SCOPE" ]; then
+          BODY="$BODY"$'\n\n## Out of scope\n\n'"$OUT_OF_SCOPE"
+        fi
+        if [ -n "$BODY" ]; then
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
+        fi
+
+        # Reply to inline review threads
+        while IFS= read -r reply; do
+          [ -z "$reply" ] && continue
+          COMMENT_ID=$(echo "$reply" | jq -r '.comment_id')
+          REPLY_BODY=$(echo "$reply" | jq -r '.body')
+          if [ -n "$COMMENT_ID" ] && [ "$COMMENT_ID" != "null" ]; then
+            gh api "repos/$REPO/pulls/$PR_NUMBER/comments/$COMMENT_ID/replies" \
+              -f body="$REPLY_BODY" || true
+          fi
+        done < <(echo "$STRUCTURED_OUTPUT" | jq -c '(.inline_replies // [])[]')
+
+        # Re-request review from listed human reviewers
+        REVIEWER_ARGS=()
+        while IFS= read -r reviewer; do
+          [ -z "$reviewer" ] && continue
+          REVIEWER_ARGS+=(-f "reviewers[]=$reviewer")
+        done < <(echo "$STRUCTURED_OUTPUT" | jq -r '(.rerequest_reviewers // [])[]')
+        if [ ${#REVIEWER_ARGS[@]} -gt 0 ]; then
+          gh api "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
+            -X POST "${REVIEWER_ARGS[@]}" || true
+        fi
+
+branding:
+  icon: message-square
+  color: orange

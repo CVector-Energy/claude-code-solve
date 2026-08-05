@@ -1,0 +1,31 @@
+name: 'Claude Code working reaction'
+description: >
+  React to whatever triggered this run so the author can see the agent picked it up, and take the reaction back when the job ends.
+
+inputs:
+  github-token:
+    description: >
+      Token that may react. A composite action cannot read the caller's secrets, and a post step cannot either, so this is passed in.
+    required: true
+  reaction:
+    description: 'Reaction content: eyes, +1, rocket, and the rest of the GitHub set.'
+    required: false
+    default: eyes
+
+outputs:
+  reacted:
+    description: '"true" when a reaction was added, and so will be removed at the end of the job.'
+
+# A JavaScript action rather than a composite one, so that it can declare its own
+# post step. The caller writes one step; the removal happens on the way out,
+# including when the job failed — which a second composite step could not do,
+# because a failing step aborts the rest of a composite action.
+runs:
+  using: node24
+  main: dist/main.mjs
+  post: dist/post.mjs
+  post-if: always()
+
+branding:
+  icon: eye
+  color: orange

@@ -28,3 +28,18 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # reaction/dist is committed because the runner executes it directly, so it
+      # can drift from src/ silently — the action would keep working while
+      # shipping stale behaviour.
+      - name: Rebuild
+        run: npm run build
+
+      - name: Check dist is current
+        run: |
+          if ! git diff --quiet -- reaction/dist; then
+            echo "::error::reaction/dist is stale. Run 'npm run build' and commit the result."
+            git diff --stat -- reaction/dist
+            exit 1
+          fi
+          echo "reaction/dist matches src/."

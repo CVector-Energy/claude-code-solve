@@ -3,9 +3,13 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
 
-const PATHS = { triage: "action.yml", implement: "implement/action.yml" };
+const PATHS = {
+  triage: "triage/action.yml",
+  implement: "implement/action.yml",
+  respond: "respond/action.yml",
+};
 const load = (which) => parse(fs.readFileSync(PATHS[which], "utf8"));
-const ACTIONS = { triage: load("triage"), implement: load("implement") };
+const ACTIONS = Object.fromEntries(Object.keys(PATHS).map((k) => [k, load(k)]));
 const stepById = (action, id) => action.runs.steps.find((step) => step.id === id);
 
 for (const [which, action] of Object.entries(ACTIONS)) {
@@ -155,3 +159,37 @@ for (const [which, role] of [["triage", "triage"], ["implement", "implement"]]) 
     );
   });
 }
+
+
+// Ported from the retired claude-code-respond repository.
+const RESPOND = ACTIONS.respond.runs.steps;
+const respondStep = (id) => RESPOND.find((s) => s.id === id);
+const respondNamed = (fragment) =>
+  RESPOND.find((s) => (s.name ?? "").toLowerCase().includes(fragment));
+
+test("the agent resumes the session restored for this pull request", () => {
+  assert.match(respondStep("session").with.scope, /^pr-\$\{\{ inputs\.pr-number \}\}$/);
+  assert.ok(respondStep("respond").with.claude_args.includes("steps.session.outputs.resume-args"));
+});
+
+test("the prompt is rendered where its text is fetched", () => {
+  // Two steps would mean the review text becomes a step output on the way past,
+  // and a fixed heredoc delimiter there is terminable by the text it carries.
+  const step = respondStep("prompt");
+  assert.ok(step.run.includes("gh pr view"));
+  assert.ok(step.run.includes("envsubst"));
+  assert.equal(step.run.split('>> "$GITHUB_OUTPUT"').length - 1, 1);
+  assert.ok(step.run.includes('DELIM="EOF_$(openssl rand -hex 16)"'));
+  assert.ok(!/<<[A-Z_]+EOF/.test(step.run), "fixed heredoc delimiter");
+});
+
+test("a push cannot clobber a branch that moved under it", () => {
+  const step = respondNamed("commit and push");
+  assert.ok(step.run.includes("--force-with-lease="));
+  assert.ok(step.run.includes("git ls-remote"), "the lease needs the remote sha");
+});
+
+test("replies are only posted when the agent produced them", () => {
+  assert.equal(respondNamed("post comments").if, "steps.respond.outputs.structured_output");
+});
+

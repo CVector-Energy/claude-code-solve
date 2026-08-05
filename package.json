@@ -2,13 +2,18 @@
   "name": "claude-code-solve",
   "version": "1.0.0",
   "private": true,
-  "description": "GitHub Action: triage and fix a GitHub issue with Claude Code",
+  "description": "GitHub Actions for driving Claude Code through an issue: react, triage, implement, respond",
   "license": "MIT",
   "scripts": {
-    "test": "node --test src/*.test.js"
+    "build": "esbuild src/reaction/main.js src/reaction/post.js --bundle --platform=node --target=node24 --format=esm --outdir=reaction/dist --out-extension:.js=.mjs --banner:js=\"import{createRequire as __ccsRequire}from'node:module';const require=__ccsRequire(import.meta.url);\"",
+    "test": "node --test src/*.test.js src/**/*.test.js"
   },
   "devDependencies": {
+    "esbuild": "0.27.2",
     "yaml": "2.8.1"
   },
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@actions/core": "3.0.1"
+  }
 }
