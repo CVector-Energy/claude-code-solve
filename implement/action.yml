@@ -51,7 +51,7 @@ outputs:
     value: ${{ steps.implement.outputs.session_id }}
   execution-file:
     description: Path to the execution log, for the caller to upload as a trace artifact.
-    value: ${{ steps.implement.outputs.execution_file }}
+    value: ${{ steps.trace.outputs.path }}
 
 runs:
   using: composite
@@ -99,6 +99,26 @@ runs:
           ${{ inputs.resume-session-id && format('--resume {0}', inputs.resume-session-id) || '' }}
         github_token: ${{ inputs.github-token }}
         prompt: ${{ steps.prompt.outputs.body }}
+
+    # Every agent in a job writes to the same $RUNNER_TEMP/claude-execution-output.json,
+    # so the next one overwrites this log before the caller can upload it. Copy it
+    # aside under a name of our own, and do it even when the agent failed — that is
+    # the trace someone will actually want to read.
+    - name: Preserve the execution log
+      id: trace
+      if: always()
+      shell: bash
+      env:
+        SOURCE: ${{ steps.implement.outputs.execution_file }}
+      run: |
+        set -euo pipefail
+        DEST="$RUNNER_TEMP/claude-trace-implement.json"
+        if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+          cp "$SOURCE" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=" >> "$GITHUB_OUTPUT"
+        fi
 
 branding:
   icon: git-branch

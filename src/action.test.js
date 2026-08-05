@@ -135,3 +135,23 @@ test("implement does not restore memory a second time", () => {
   );
   assert.equal(again, false);
 });
+
+for (const [which, role] of [["triage", "triage"], ["implement", "implement"]]) {
+  test(`${which}: the execution log is copied aside even when the agent failed`, () => {
+    // Every agent in a job writes the same $RUNNER_TEMP filename, so the next one
+    // destroys this log before the caller can upload it.
+    const steps = ACTIONS[which].runs.steps;
+    const trace = steps.find((s) => s.id === "trace");
+    assert.ok(trace, `${which} does not preserve its log`);
+    assert.equal(trace.if, "always()");
+    assert.ok(trace.run.includes(`claude-trace-${role}.json`));
+    assert.ok(
+      steps.indexOf(trace) >
+        steps.findIndex((s) => (s.uses ?? "").includes("claude-code-action")),
+    );
+    assert.equal(
+      ACTIONS[which].outputs["execution-file"].value.trim(),
+      "${{ steps.trace.outputs.path }}",
+    );
+  });
+}

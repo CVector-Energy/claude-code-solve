@@ -48,34 +48,25 @@ outputs:
     value: ${{ steps.triage.outputs.structured_output }}
   execution-file:
     description: Path to the execution log, for the caller to upload as a trace artifact.
-    value: ${{ steps.triage.outputs.execution_file }}
+    value: ${{ steps.trace.outputs.path }}
 
 runs:
   using: composite
   steps:
-    # Repo-wide knowledge, restored before the agent and saved by the action's own
-    # post step at the end of the job. Unlike the session below it is not scoped to
-    # this issue: what an agent learns about the repository is worth having on the
-    # next one.
+    # Repo-wide knowledge, restored before the agent and saved by the action's own post step at the end of the job. Unlike the session below it is not scoped to this issue: what an agent learns about the repository is worth having on the next one.
     #
-    # Restored here and not in the implement action, which runs later in the same
-    # job and would otherwise extract the cache a second time over a store this
-    # agent has already written to.
+    # Restored here and not in the implement action, which runs later in the same job and would otherwise extract the cache a second time over a store this agent has already written to.
     - name: Restore Claude Code memory
       uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
 
-    # Scoped to this issue, so a later run on it — a new comment, or a re-run
-    # after a push — continues this conversation and nothing else. The action's
-    # post step saves whatever session this job writes.
+    # Scoped to this issue, so a later run on it — a new comment, or a re-run after a push — continues this conversation and nothing else. The action's post step saves whatever session this job writes.
     - name: Restore Claude session
       id: session
       uses: CVector-Energy/claude-code-session@f6eb26ff2567feaf7df3f2cf0d4a6d64e0123656 # v0.1.1
       with:
         scope: issue-${{ inputs.issue-number }}
 
-    # Fetched and rendered in one step so the issue text stays a shell variable
-    # until it is inside the prompt, rather than crossing a step boundary as an
-    # output where a fixed heredoc delimiter would be terminable by that text.
+    # Fetched and rendered in one step so the issue text stays a shell variable until it is inside the prompt, rather than crossing a step boundary as an output where a fixed heredoc delimiter would be terminable by that text.
     - name: Render prompt
       id: prompt
       shell: bash
@@ -116,6 +107,27 @@ runs:
         github_token: ${{ inputs.github-token }}
         show_full_output: ${{ inputs.show-full-output }}
         prompt: ${{ steps.prompt.outputs.body }}
+
+
+    # Every agent in a job writes to the same $RUNNER_TEMP/claude-execution-output.json,
+    # so the next one overwrites this log before the caller can upload it. Copy it
+    # aside under a name of our own, and do it even when the agent failed — that is
+    # the trace someone will actually want to read.
+    - name: Preserve the execution log
+      id: trace
+      if: always()
+      shell: bash
+      env:
+        SOURCE: ${{ steps.triage.outputs.execution_file }}
+      run: |
+        set -euo pipefail
+        DEST="$RUNNER_TEMP/claude-trace-triage.json"
+        if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+          cp "$SOURCE" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Parse triage result
       id: parse
