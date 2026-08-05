@@ -367,3 +367,29 @@ test("fix-ci pushes nothing when the agent changed nothing", () => {
   assert.ok(push.includes("git diff --cached --quiet"));
   assert.ok(push.includes("--force-with-lease="));
 });
+
+test("implement can label the issue, and does not by default", () => {
+  // The label is a caller's convention, so an empty default means no label rather
+  // than one repository's word for it shipped to everyone.
+  assert.equal(ACTIONS.implement.inputs["success-label"].default, "");
+  const step = ACTIONS.implement.runs.steps.find(
+    (s) => (s.name ?? "").toLowerCase().includes("label"),
+  );
+  assert.ok(step, "implement does not label");
+  assert.ok(String(step.if).includes("inputs.success-label != ''"));
+});
+
+test("implement will not claim a pull request that does not exist", () => {
+  // The label says one was opened. The agent is asked to open it, and a run that
+  // ended without doing so would otherwise leave the issue asserting otherwise.
+  const step = ACTIONS.implement.runs.steps.find(
+    (s) => (s.name ?? "").toLowerCase().includes("label"),
+  );
+  assert.ok(step.run.includes("gh pr list"), "it has to check first");
+  assert.ok(step.run.includes('--head "$BRANCH"'));
+  const labelAt = ACTIONS.implement.runs.steps.indexOf(step);
+  const agentAt = ACTIONS.implement.runs.steps.findIndex((s) =>
+    (s.uses ?? "").includes("claude-code-action"),
+  );
+  assert.ok(agentAt < labelAt, "the label comes after the agent that earns it");
+});

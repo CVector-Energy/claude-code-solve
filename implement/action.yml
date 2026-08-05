@@ -41,6 +41,11 @@ inputs:
     description: >
       The fix branch to create. `resolve-pr` derives this from the issue number and the prefix that also decides which pull requests the review workflow owns, so the name has one home rather than being spelled again here.
     required: true
+  success-label:
+    description: >
+      Label to add to the issue once the agent has opened a pull request. Empty — the default — adds none. It is applied only when a pull request actually exists on the branch, so it cannot claim one that was never opened.
+    required: false
+    default: ''
   prompt-template:
     description: >
       Template rendered into the agent's prompt, relative to the workspace. Only `$ISSUE_NUMBER` is substituted — the issue text is already in the resumed conversation.
@@ -123,6 +128,32 @@ runs:
         else
           echo "path=" >> "$GITHUB_OUTPUT"
         fi
+
+    # The label asserts that a pull request exists, so check that one does. The
+    # prompt asks the agent to open it, and a run that ended without doing so would
+    # otherwise leave the issue claiming otherwise.
+    - name: Label the issue
+      if: inputs.success-label != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH: ${{ inputs.branch }}
+        LABEL: ${{ inputs.success-label }}
+      run: |
+        set -euo pipefail
+        if ! PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --json number -q '.[0].number'); then
+          echo "Could not check for a pull request on $BRANCH; not labelling." >&2
+          exit 0
+        fi
+        if [ -z "$PR" ]; then
+          echo "::warning::No pull request on $BRANCH, so not adding $LABEL to #$ISSUE_NUMBER."
+          exit 0
+        fi
+        # A label the repository does not define should not fail a job that worked.
+        gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$LABEL" || true
+        echo "Added $LABEL to #$ISSUE_NUMBER (pull request #$PR)."
 
 branding:
   icon: git-branch

@@ -106,9 +106,12 @@ Outputs: `disposition`, `session-id`, `structured-output`, `execution-file`.
 | `claude-args` | CLI arguments, excluding the resume this action adds | No | `--dangerously-skip-permissions` |
 | `allowed-bots` | Bot logins whose comments may reach the agent | No | `''` |
 | `branch` | The fix branch to create; take it from `resolve-pr` so the name has one home | Yes | |
+| `success-label` | Label to add to the issue once a pull request exists on the branch | No | `''` |
 | `prompt-template` | Template to render | No | `.github/prompts/issue-implement.md` |
 
 Outputs: `branch`, `session-id`, `execution-file`.
+
+`success-label` is applied only when a pull request is actually open on the branch. The agent is asked to create one, but a run that finished without doing so should not leave the issue labelled as though it had.
 
 ## Prompts Stay Yours
 
