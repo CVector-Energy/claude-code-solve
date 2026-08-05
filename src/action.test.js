@@ -399,6 +399,7 @@ test("implement will not claim a pull request that does not exist", () => {
 const REUSABLE = {
   issue: ".github/workflows/issue.yml",
   "pr-review-response": ".github/workflows/pr-review-response.yml",
+  "ci-failure-response": ".github/workflows/ci-failure-response.yml",
 };
 const workflow = (which) => parse(fs.readFileSync(REUSABLE[which], "utf8"));
 // `on:` is YAML 1.1's boolean true.
@@ -470,7 +471,47 @@ test("the issue workflow keeps triage off the toolchain it has not set up yet", 
   );
 });
 
-test("the branch prefix has one home across both workflows", () => {
+test("the CI responder leaves its trigger to the caller", () => {
+  // `workflow_run` names the CI workflow, which only the caller knows — and a
+  // called workflow cannot declare a trigger at all. What it can do is read the
+  // event, which is all this needs.
+  const w = workflow("ci-failure-response");
+  assert.equal((w.on ?? w[true]).workflow_run, undefined);
+  assert.ok(jobOf("ci-failure-response").if.includes("workflow_run.conclusion == 'failure'"));
+  const fix = jobOf("ci-failure-response").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
+  assert.equal(fix.with["run-id"], "${{ github.event.workflow_run.id }}");
+});
+
+test("the CI responder acts only on a pull request the agent owns", () => {
+  // It holds a contents:write App token and pushes. The caller's branch filter is
+  // the cheap check; this is the one that asks the pull request.
+  for (const step of jobOf("ci-failure-response").steps.slice(2)) {
+    assert.ok(String(step.if).includes("steps.pr.outputs.managed == 'true'"), step.name);
+    assert.ok(String(step.if).includes("steps.pr.outputs.exists == 'true'"), step.name);
+  }
+});
+
+test("the CI responder's ceiling and prompt are the caller's to set", () => {
+  // The prompt is where a repository names its own checks, and the ceiling is what
+  // stops an agent it cannot satisfy from looping on its own pushes.
+  const call = callable("ci-failure-response");
+  assert.equal(call.inputs["max-attempts"].default, 3);
+  assert.equal(call.inputs["prompt-template"].default, ".github/prompts/ci-failure.md");
+  const fix = jobOf("ci-failure-response").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
+  assert.equal(fix.with["max-attempts"], "${{ inputs.max-attempts }}");
+  assert.equal(fix.with["prompt-template"], "${{ inputs.prompt-template }}");
+});
+
+test("the CI responder checks out the history its budget is counted from", () => {
+  // The attempt count comes from `git log origin/<branch>`, so a shallow checkout
+  // would read zero attempts every time and the ceiling would never bite.
+  const checkout = jobOf("ci-failure-response").steps.find((s) =>
+    (s.uses ?? "").includes("actions/checkout"),
+  );
+  assert.equal(checkout.with["fetch-depth"], 0);
+});
+
+test("the branch prefix has one home across every workflow", () => {
   // It named the fix branch, gated the review workflow's job, and defaulted inside
   // implement. One input now, and resolve-pr is told it.
   for (const which of Object.keys(REUSABLE)) {

@@ -8,6 +8,7 @@ Reusable workflows for driving Claude Code through a GitHub issue, and the actio
 |----------|--------------|
 | `…/claude-code-solve/.github/workflows/issue.yml` | Triage an issue, and on a fixable one branch and implement the fix |
 | `…/claude-code-solve/.github/workflows/pr-review-response.yml` | Answer a review on a pull request the agent owns |
+| `…/claude-code-solve/.github/workflows/ci-failure-response.yml` | Fix the branch after CI fails on it, up to a bounded number of attempts |
 
 A caller supplies its triggers, its permissions, a few conventions, and **one local action** for language-specific initialisation:
 
@@ -39,6 +40,37 @@ jobs:
 ```
 
 Triggers, `permissions` and `concurrency` cannot be delegated — a called workflow declares none of them, and a caller cannot grant more than it holds.
+
+## Answering CI
+
+Rather than repeating your checks inside the solver, let CI be the verifier and react to its verdict. The caller owns the trigger, because `workflow_run` has to name your CI workflow — and because **the branch filter belongs there**: this job holds a `contents: write` App token, and a job-level `if:` is too late to stop it starting on a branch the agent does not own.
+
+```yaml
+name: CI Failure Response
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: ['claude/issue-**']   # must agree with branch-prefix
+permissions:
+  contents: read
+concurrency:                        # one attempt at a time per branch
+  group: ci-failure-response-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+jobs:
+  fix:
+    uses: CVector-Energy/claude-code-solve/.github/workflows/ci-failure-response.yml@<sha>
+    with:
+      app-id: ${{ vars.APP_ID }}
+      fix-args: ${{ ... }}          # this agent edits and builds, so it needs Bash
+      git-user-name: my-bot[bot]
+      git-user-email: 12345+my-bot[bot]@users.noreply.github.com
+    secrets:
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+The agent's push starts CI again, which is what lets this converge and also what could loop. `max-attempts` (default 3) is counted from the agent's own commits on the branch, so a re-run cannot reset it, and a failure it cannot fix stops rather than spinning. It leaves the working tree alone when nothing it can change would help — an empty tree is how it says a human should look.
 
 ## The callback protocol
 

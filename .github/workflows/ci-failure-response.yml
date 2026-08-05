@@ -1,0 +1,144 @@
+name: CI failure response
+
+# CI is the verifier. The solver does not repeat its checks before opening a pull
+# request; this reacts to the verdict instead.
+#
+# The trigger stays with the caller — a called workflow declares none, and
+# `workflow_run` names the CI workflow, which only the caller knows. What the
+# caller must also do is filter the trigger by branch: this job holds a
+# contents:write App token, and a job-level `if:` is too late to stop it starting
+# on a branch the agent does not own.
+#
+# `uses: ./.github/actions/agent-setup` below resolves against the runner's
+# workspace, which is the CALLER's checkout — the same callback the issue and
+# review workflows use. This agent reproduces a CI failure locally, so it needs
+# whatever they need.
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: GitHub App id whose token the agent acts under.
+        required: true
+        type: string
+      fix-args:
+        description: >
+          Claude CLI arguments. The agent edits and runs the repository's checks, so unlike triage it needs Bash.
+        required: true
+        type: string
+      git-user-name:
+        description: Name the fix commit is authored under.
+        required: true
+        type: string
+      git-user-email:
+        description: Email the fix commit is authored under.
+        required: true
+        type: string
+      allowed-bots:
+        description: Comma-separated bot logins whose comments may reach the agent.
+        required: false
+        type: string
+        default: ''
+      branch-prefix:
+        description: >
+          What marks a pull request as the agent's. Checked against the pull request itself; the caller's `workflow_run` branch filter is the cheap check that comes first.
+        required: false
+        type: string
+        default: claude/issue-
+      max-attempts:
+        description: >
+          How many times the agent may chase one branch's CI before giving up. Counted from its own commits on the branch, so a re-run does not reset it.
+        required: false
+        type: number
+        default: 3
+      prompt-template:
+        description: >
+          Prompt rendered in the caller's workspace. This is where a repository names its own checks, which is why it is a file rather than an input.
+        required: false
+        type: string
+        default: .github/prompts/ci-failure.md
+      setup:
+        description: >
+          Whether to call `./.github/actions/agent-setup` in the caller before the agent.
+        required: false
+        type: boolean
+        default: true
+      runs-on:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-24.04
+    secrets:
+      app-private-key:
+        description: Private key for the GitHub App.
+        required: true
+      anthropic-api-key:
+        description: Anthropic API key.
+        required: true
+
+jobs:
+  fix:
+    name: Fix CI failure
+    runs-on: ${{ inputs.runs-on }}
+    if: github.event.workflow_run.conclusion == 'failure'
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      id-token: write
+    steps:
+      - name: Create GitHub App Token
+        id: app
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: read
+
+      # A workflow_run event names a branch, not a pull request. Nothing to do if
+      # the branch has none open, and nothing to do if it is not ours.
+      - name: Resolve the pull request
+        id: pr
+        uses: CVector-Energy/claude-code-solve/resolve-pr@6581f08081467467a207c2612d6447ef7155fc48
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          branch-prefix: ${{ inputs.branch-prefix }}
+
+      # Full history: the attempt budget is counted from the branch's own commits.
+      # No persisted credentials — the action pushes over an explicitly
+      # authenticated URL.
+      - name: Checkout the branch that failed
+        if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up the caller's toolchain
+        if: >
+          inputs.setup && steps.pr.outputs.exists == 'true' &&
+          steps.pr.outputs.managed == 'true'
+        uses: ./.github/actions/agent-setup
+
+      - name: Fix the CI failure
+        id: fix
+        if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
+        uses: CVector-Energy/claude-code-solve/fix-ci@6581f08081467467a207c2612d6447ef7155fc48
+        with:
+          pr-number: ${{ steps.pr.outputs.number }}
+          branch: ${{ steps.pr.outputs.branch }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ steps.app.outputs.token }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          claude-args: ${{ inputs.fix-args }}
+          max-attempts: ${{ inputs.max-attempts }}
+          prompt-template: ${{ inputs.prompt-template }}
+          allowed-bots: ${{ inputs.allowed-bots }}
+          show-full-output: true
+          git-user-name: ${{ inputs.git-user-name }}
+          git-user-email: ${{ inputs.git-user-email }}
