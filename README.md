@@ -4,6 +4,7 @@ Two actions for the middle of an issue-solving workflow: **triage** an issue and
 
 | Action | What it does |
 |--------|--------------|
+| `…/claude-code-solve/resolve-pr` | Works out which pull request the run concerns, whether one exists yet, and whether its branch is the agent's — and owns the branch prefix that answers all three |
 | `…/claude-code-solve/reaction` | Reacts to whatever triggered the run, and takes the reaction back when the job ends — no cleanup step of your own |
 | `…/claude-code-solve/triage` | Restores the repo's Claude memory, resumes the issue's session, renders the triage prompt, runs the agent, reports `fixable` / `needs-clarification` / `no-action`, and comments on the issue for the latter two |
 | `…/claude-code-solve/implement` | Branches, renders the implement prompt, and runs an agent that continues the triage conversation |
@@ -35,13 +36,21 @@ jobs:
 
       # One step. The reaction is removed by this action's post step when the job
       # ends, pass or fail.
-      - uses: CVector-Energy/claude-code-solve/reaction@v1.0.0
+      - uses: CVector-Energy/claude-code-solve/reaction@<sha>
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+
+      # Owns the branch prefix: it names the fix branch, and it is what tells the
+      # review workflow which pull requests are the agent's. Stop here when one is
+      # already open — the implement agent force-pushes.
+      - id: pr
+        uses: CVector-Energy/claude-code-solve/resolve-pr@<sha>
         with:
           github-token: ${{ steps.app.outputs.token }}
 
       - name: Triage
         id: triage
-        uses: CVector-Energy/claude-code-solve/triage@v1.0.0
+        uses: CVector-Energy/claude-code-solve/triage@<sha>
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -55,13 +64,14 @@ jobs:
       - name: Implement
         id: implement
         if: steps.triage.outputs.disposition == 'fixable'
-        uses: CVector-Energy/claude-code-solve/implement@v1.0.0
+        uses: CVector-Energy/claude-code-solve/implement@<sha>
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           resume-session-id: ${{ steps.triage.outputs.session-id }}
           claude-args: '--dangerously-skip-permissions --model claude-opus-5'
+          branch: ${{ steps.pr.outputs.branch }}
           git-user-name: my-bot[bot]
           git-user-email: 12345+my-bot[bot]@users.noreply.github.com
 ```
@@ -94,7 +104,7 @@ Outputs: `disposition`, `session-id`, `structured-output`, `execution-file`.
 | `resume-session-id` | Triage's session, so the agent implements the plan it already made | No | `''` |
 | `claude-args` | CLI arguments, excluding the resume this action adds | No | `--dangerously-skip-permissions` |
 | `allowed-bots` | Bot logins whose comments may reach the agent | No | `''` |
-| `branch-prefix` | Prefix for the fix branch; the issue number is appended | No | `claude/issue-` |
+| `branch` | The fix branch to create; take it from `resolve-pr` so the name has one home | Yes | |
 | `prompt-template` | Template to render | No | `.github/prompts/issue-implement.md` |
 
 Outputs: `branch`, `session-id`, `execution-file`.
@@ -124,7 +134,7 @@ Deliberately not absorbed:
 
 ## Pinning
 
-Pin by full commit sha. These actions carry an API key and a write-scoped token, so a ref that can be repointed under you is the wrong thing to depend on, and there is deliberately no floating `v1` tag.
+Pin by full commit sha; there are no version tags. These actions carry an API key and a write-scoped token, so a ref that can be repointed under you is the wrong thing to depend on, and there is deliberately no floating `v1` tag.
 
 ## Development
 
