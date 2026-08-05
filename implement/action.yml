@@ -32,10 +32,10 @@ inputs:
   git-user-email:
     description: Email the fix branch's commits are authored under.
     required: true
-  branch-prefix:
-    description: Prefix for the fix branch; the issue number is appended.
-    required: false
-    default: claude/issue-
+  branch:
+    description: >
+      The fix branch to create. `resolve-pr` derives this from the issue number and the prefix that also decides which pull requests the review workflow owns, so the name has one home rather than being spelled again here.
+    required: true
   prompt-template:
     description: >
       Template rendered into the agent's prompt, relative to the workspace. Only `$ISSUE_NUMBER` is substituted — the issue text is already in the resumed conversation.
@@ -60,15 +60,13 @@ runs:
       id: branch
       shell: bash
       env:
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        BRANCH: ${{ inputs.branch }}
         GIT_USER_NAME: ${{ inputs.git-user-name }}
         GIT_USER_EMAIL: ${{ inputs.git-user-email }}
       run: |
         set -euo pipefail
         git config user.name "$GIT_USER_NAME"
         git config user.email "$GIT_USER_EMAIL"
-        BRANCH="${BRANCH_PREFIX}${ISSUE_NUMBER}"
         git checkout -b "$BRANCH"
         echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 

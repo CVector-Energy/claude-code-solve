@@ -131,7 +131,7 @@ Pin by full commit sha. These actions carry an API key and a write-scoped token,
 ```sh
 npm install
 npm run build   # bundle the reaction action into reaction/dist
-npm test        # node --test — action wiring and the reaction endpoint logic
+npm test        # node --test — action wiring, the reaction endpoint, the resolve script
 ```
 
 ## License

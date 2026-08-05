@@ -3,13 +3,19 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
 
+// Actions that run an agent, and so share a shape worth checking in a loop.
 const PATHS = {
   triage: "triage/action.yml",
   implement: "implement/action.yml",
   respond: "respond/action.yml",
 };
+/** Every composite action here, agent or not. */
+const ALL_PATHS = { ...PATHS, "resolve-pr": "resolve-pr/action.yml" };
 const load = (which) => parse(fs.readFileSync(PATHS[which], "utf8"));
 const ACTIONS = Object.fromEntries(Object.keys(PATHS).map((k) => [k, load(k)]));
+const ALL = Object.fromEntries(
+  Object.keys(ALL_PATHS).map((k) => [k, parse(fs.readFileSync(ALL_PATHS[k], "utf8"))]),
+);
 const stepById = (action, id) => action.runs.steps.find((step) => step.id === id);
 
 for (const [which, action] of Object.entries(ACTIONS)) {
@@ -193,3 +199,82 @@ test("replies are only posted when the agent produced them", () => {
   assert.equal(respondNamed("post comments").if, "steps.respond.outputs.structured_output");
 });
 
+
+
+// ─── resolve-pr ──────────────────────────────────────────────────────────────
+
+const RESOLVE = () => ALL["resolve-pr"];
+const resolveStep = () => RESOLVE().runs.steps[0];
+
+for (const [which, action] of Object.entries(ALL)) {
+  test(`${which}: hygiene shared by every action here`, () => {
+    assert.equal(action.runs.using, "composite");
+    const text = fs
+      .readFileSync(ALL_PATHS[which], "utf8")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("uses:"))
+      .join("\n");
+    for (const leaked of ["cvector", "CVector", "users.noreply.github.com"]) {
+      assert.ok(!text.includes(leaked), `${ALL_PATHS[which]} mentions ${leaked}`);
+    }
+    for (const step of action.runs.steps.filter((s) => s.run)) {
+      assert.ok(
+        !/\$\{\{\s*inputs\./.test(step.run),
+        `${step.name} interpolates an input into its script`,
+      );
+    }
+  });
+}
+
+test("resolve-pr owns the branch prefix the workflows had to agree about", () => {
+  // It named the fix branch in the issue workflow, decided eligibility in the
+  // review workflow, and defaulted inside implement. Three places that had to
+  // match, and nothing made them.
+  assert.equal(RESOLVE().inputs["branch-prefix"].default, "claude/issue-");
+  assert.ok(RESOLVE().outputs.branch, "callers need the branch it derived");
+});
+
+test("resolve-pr reports whether the work item already has a pull request", () => {
+  // The issue workflow stops on this: the implement agent runs
+  // --dangerously-skip-permissions, and a force-push would discard the commits
+  // an existing pull request is carrying.
+  assert.ok(RESOLVE().outputs.exists);
+  assert.ok(resolveStep().run.includes("gh pr list"));
+});
+
+test("resolve-pr reports whether the branch is one of ours", () => {
+  // The review workflow acts only on branches the agent created.
+  assert.ok(RESOLVE().outputs.managed);
+});
+
+test("resolve-pr stops on a failed lookup rather than reporting no pull request", () => {
+  assert.ok(resolveStep().run.includes("set -euo pipefail"));
+});
+
+test("resolve-pr reads the event rather than taking a mode", () => {
+  // Both callers' `if:` conditions already fix which kind of event this is; a
+  // mode input would be a second place for that to be stated, and to be wrong.
+  const env = resolveStep().env;
+  assert.match(String(env.EVENT_NAME), /github\.event_name/);
+  assert.ok(
+    Object.values(env).some((v) => String(v).includes("issue.pull_request")),
+    "an issue_comment has to be told apart from a pull request comment",
+  );
+});
+
+test("resolve-pr does not carry the author nobody read", () => {
+  // The step it replaces published `author`, and no workflow referenced it.
+  assert.equal(RESOLVE().outputs.author, undefined);
+});
+
+test("implement takes the branch rather than spelling the prefix again", () => {
+  // The prefix decided three things that had to agree: the branch a fix goes on,
+  // whether the review workflow owns a pull request, and this default. resolve-pr
+  // owns it now, and the name flows from there.
+  assert.equal(ACTIONS.implement.inputs["branch-prefix"], undefined);
+  assert.equal(ACTIONS.implement.inputs.branch.required, true);
+  assert.ok(
+    !JSON.stringify(ACTIONS.implement).includes("claude/issue-"),
+    "implement still hardcodes a branch name",
+  );
+});

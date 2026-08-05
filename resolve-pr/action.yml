@@ -1,0 +1,113 @@
+name: 'Resolve the pull request for this run'
+description: >
+  Work out which pull request this run concerns, whether it exists yet, and whether it is one the agent owns — from the event that triggered the run.
+
+inputs:
+  github-token:
+    description: Token that may read pull requests.
+    required: true
+  branch-prefix:
+    description: >
+      What marks a branch as the agent's own. This names the branch a fix goes on, and it is also what identifies a pull request as one the review workflow may act on, so it lives here rather than in each workflow that has to agree about it.
+    required: false
+    default: claude/issue-
+
+outputs:
+  number:
+    description: >
+      The pull request number. Empty when the run concerns an issue that has no pull request yet.
+    value: ${{ steps.resolve.outputs.number }}
+  exists:
+    description: >
+      '"true" when a pull request already exists for this work item. The issue workflow stops on this: its implement agent runs --dangerously-skip-permissions, and a force-push would discard whatever the open pull request is carrying.'
+    value: ${{ steps.resolve.outputs.exists }}
+  branch:
+    description: >
+      The branch the work happens on — the pull request's head ref, or the branch a fix for this issue would be pushed to.
+    value: ${{ steps.resolve.outputs.branch }}
+  base-ref:
+    description: The branch the pull request targets. Empty for an issue with no pull request.
+    value: ${{ steps.resolve.outputs.base-ref }}
+  managed:
+    description: '"true" when the branch carries `branch-prefix`, and so is the agent''s to push to.'
+    value: ${{ steps.resolve.outputs.managed }}
+
+runs:
+  using: composite
+  steps:
+    # No mode input: both callers' `if:` conditions already fix which kind of
+    # event this is, and a second statement of that is a second thing to get
+    # wrong. An `issue_comment` is the ambiguous one — the payload carries
+    # `issue.pull_request` when the comment is on a pull request.
+    - name: Resolve the pull request
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_FROM_PULL: ${{ github.event.pull_request.number }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        ISSUE_IS_PULL_REQUEST: ${{ github.event.issue.pull_request.url }}
+      run: |
+        # A failed lookup reported as "no pull request" is how an agent comes to
+        # force-push over an open one, so -e is on and both `gh` calls are checked
+        # explicitly as well — the empty result they are allowed to return exits 0,
+        # so the two do not conflict.
+        set -euo pipefail
+
+        case "$EVENT_NAME" in
+          pull_request_review|pull_request_review_comment|pull_request)
+            PR="$PR_FROM_PULL"
+            ;;
+          issue_comment)
+            if [ -n "$ISSUE_IS_PULL_REQUEST" ]; then PR="$ISSUE_NUMBER"; else PR=""; fi
+            ;;
+          *)
+            PR=""
+            ;;
+        esac
+
+        if [ -n "$PR" ]; then
+          if ! META=$(gh pr view "$PR" --repo "$REPO" --json headRefName,baseRefName); then
+            echo "Could not read pull request #$PR." >&2
+            exit 1
+          fi
+          BRANCH=$(printf '%s' "$META" | jq -r '.headRefName')
+          BASE_REF=$(printf '%s' "$META" | jq -r '.baseRefName')
+          EXISTS=true
+        else
+          # An issue: the branch a fix would use, which may or may not have a
+          # pull request open on it already.
+          BRANCH="${BRANCH_PREFIX}${ISSUE_NUMBER}"
+          BASE_REF=""
+          if ! PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --json number -q '.[0].number'); then
+            echo "Could not list pull requests for $BRANCH." >&2
+            exit 1
+          fi
+          if [ -n "$PR" ]; then EXISTS=true; else EXISTS=false; fi
+        fi
+
+        case "$BRANCH" in
+          "$BRANCH_PREFIX"*) MANAGED=true ;;
+          *) MANAGED=false ;;
+        esac
+
+        {
+          echo "number=$PR"
+          echo "exists=$EXISTS"
+          echo "branch=$BRANCH"
+          echo "base-ref=$BASE_REF"
+          echo "managed=$MANAGED"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$EXISTS" = "true" ]; then
+          echo "Pull request #$PR on $BRANCH (managed=$MANAGED)."
+        else
+          echo "No pull request on $BRANCH yet."
+        fi
+
+branding:
+  icon: git-pull-request
+  color: orange
