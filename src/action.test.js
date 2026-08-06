@@ -299,6 +299,61 @@ for (const which of ["triage", "implement", "respond"]) {
   });
 }
 
+// ─── the memory-store diagnostic ─────────────────────────────────────────────
+//
+// Temporary. Delete this block with scripts/inspect-memory.sh and the inputs it
+// is called from, once the store persists across runs.
+
+for (const which of ["triage", "respond", "fix-ci"]) {
+  const action = () => ALL[which];
+  const inspections = () =>
+    action().runs.steps.filter((s) => (s.run ?? "").includes("inspect-memory.sh"));
+
+  test(`${which}: the store is inspected on both sides of the agent, and off by default`, () => {
+    // One reading proves nothing: the question is whether the directory the
+    // action chose exists at all, and then whether it survives the agent.
+    assert.equal(action().inputs["inspect-memory"].default, "false");
+    const [before, after] = inspections();
+    assert.ok(before && after, `${which} does not inspect the store twice`);
+    assert.match(before.run, /inspect-memory\.sh" before$/m);
+    assert.match(after.run, /inspect-memory\.sh" after$/m);
+
+    const steps = action().runs.steps;
+    const agent = steps.findIndex((s) => (s.uses ?? "").includes("claude-code-action"));
+    assert.ok(steps.indexOf(before) < agent, "the 'before' reading is not before");
+    assert.ok(steps.indexOf(after) > agent, "the 'after' reading is not after");
+  });
+
+  test(`${which}: the reading survives an agent that died`, () => {
+    // A failed agent is exactly when the store's state is worth knowing, and a
+    // failing step otherwise aborts the rest of a composite action.
+    const [, after] = inspections();
+    assert.ok(String(after.if).includes("always()"));
+  });
+
+  test(`${which}: the diagnostic reads the path the memory action actually chose`, () => {
+    // Scanning the runner is half the answer; the other half is what the action
+    // told the agent to use, which only its own output knows.
+    const memory = action().runs.steps.find((s) =>
+      (s.uses ?? "").startsWith("CVector-Energy/claude-code-memory@"),
+    );
+    assert.equal(memory.id, "memory", `${which} cannot name the memory step`);
+    for (const step of inspections()) {
+      assert.equal(step.env.MEMORY_PATH, "${{ steps.memory.outputs.path }}");
+      assert.ok(String(step.if).includes("inputs.inspect-memory == 'true'"));
+      // A sibling file in this repository, not one in the caller's workspace —
+      // `uses: ./` would resolve there, and a bare relative path would too.
+      assert.ok(step.run.includes('"$GITHUB_ACTION_PATH/../scripts/'), step.run);
+    }
+  });
+}
+
+test("the diagnostic cannot fail the workflow it is diagnosing", () => {
+  const script = fs.readFileSync("scripts/inspect-memory.sh", "utf8");
+  assert.ok(!script.includes("set -e"), "an unset variable would abort the job");
+  assert.match(script, /\nexit 0\n?$/, "it has to end by succeeding");
+});
+
 test("resolve-pr resolves a completed workflow run by its branch", () => {
   // A workflow_run event names the head branch, never the pull request, so the
   // CI-failure responder cannot look one up the way a review event does.
@@ -341,10 +396,11 @@ test("fix-ci counts attempts from the branch, not from anywhere resettable", () 
 
 test("fix-ci does nothing at all once the budget is spent", () => {
   // Not even a session restore: the point is to stop, and leave it for a human.
+  // Containment rather than equality, because a step may carry further
+  // conditions of its own — but never instead of this one.
   for (const step of FIXCI().runs.steps.slice(1)) {
-    assert.equal(
-      step.if,
-      "steps.budget.outputs.attempted == 'true'",
+    assert.ok(
+      String(step.if).includes("steps.budget.outputs.attempted == 'true'"),
       step.name ?? step.uses,
     );
   }
@@ -525,3 +581,67 @@ test("the branch prefix has one home across every workflow", () => {
   assert.ok(gate.includes("inputs.branch-prefix"));
   assert.ok(!gate.includes("claude/issue-"));
 });
+
+// ─── the teardown callback ───────────────────────────────────────────────────
+
+const teardownOf = (which) =>
+  jobOf(which).steps.find((s) => s.uses === "./.github/actions/agent-teardown");
+
+for (const which of Object.keys(REUSABLE)) {
+  test(`${which}: the caller gets a turn after the agent, and it is opt-in`, () => {
+    // `agent-setup` cannot close what it opened: a composite action has no post
+    // step, and anything worth doing at the end — packing a cache around
+    // everything the run pulled, not just the install — has to happen after the
+    // agent, not around it. Off by default, because `uses:` cannot be an
+    // expression: a repository without the action would fail at the step.
+    const step = teardownOf(which);
+    assert.ok(step, `${which} has no teardown callback`);
+    assert.equal(callable(which).inputs.teardown.default, false);
+    assert.ok(String(step.if).includes("inputs.teardown"));
+  });
+
+  test(`${which}: teardown runs after a failure but not after a cancel`, () => {
+    // A run that failed late pulled what a run that passed would have, so its
+    // cache entry is worth just as much. A cancelled one should end now.
+    const step = teardownOf(which);
+    assert.ok(String(step.if).includes("!cancelled()"));
+    assert.ok(!String(step.if).includes("always()"));
+  });
+
+  test(`${which}: teardown is gated on the same work setup was`, () => {
+    // Nothing to tear down where nothing was set up — and on the review and CI
+    // paths, an unmanaged branch never reached the checkout.
+    const setup = jobOf(which).steps.find(
+      (s) => s.uses === "./.github/actions/agent-setup",
+    );
+    const gates = String(setup.if)
+      .split("&&")
+      .map((clause) => clause.trim())
+      .filter((clause) => !clause.includes("inputs.setup"));
+    for (const gate of gates) {
+      assert.ok(
+        String(teardownOf(which).if).replace(/\s+/g, " ").includes(gate.replace(/\s+/g, " ")),
+        `${which}: teardown does not require ${gate}`,
+      );
+    }
+  });
+
+  test(`${which}: teardown is last, so it sees everything the job pulled`, () => {
+    // One parse: `jobOf` re-reads the file, so a step from another call is a
+    // different object and would never be found by identity.
+    const steps = jobOf(which).steps;
+    const at = steps.findIndex((s) => s.uses === "./.github/actions/agent-teardown");
+    assert.equal(at, steps.length - 1);
+  });
+
+  test(`${which}: the memory diagnostic is plumbed through, and off by default`, () => {
+    assert.equal(callable(which).inputs["inspect-memory"].default, false);
+    const agents = jobOf(which).steps.filter((s) =>
+      /\/(triage|respond|fix-ci)@/.test(s.uses ?? ""),
+    );
+    assert.ok(agents.length > 0);
+    for (const step of agents) {
+      assert.equal(step.with["inspect-memory"], "${{ inputs.inspect-memory }}");
+    }
+  });
+}

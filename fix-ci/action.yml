@@ -49,6 +49,11 @@ inputs:
     description: Echo Claude's full JSON output into the job log.
     required: false
     default: 'false'
+  inspect-memory:
+    description: >
+      Log where the auto-memory store actually is, on either side of the agent. A diagnostic for a store whose post-step save fails, and temporary — see scripts/inspect-memory.sh.
+    required: false
+    default: 'false'
 
 outputs:
   attempted:
@@ -87,8 +92,17 @@ runs:
         fi
 
     - name: Restore Claude Code memory
+      id: memory
       if: steps.budget.outputs.attempted == 'true'
       uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
+    # $GITHUB_ACTION_PATH is this action's directory inside the checked-out repository, so the script one level up is reachable without a self-referential `uses:` and its pinning dance. Gated on the budget like everything else here: a run that is not going to touch the store has nothing to report about it.
+    - name: Inspect the memory store (before the agent)
+      if: steps.budget.outputs.attempted == 'true' && inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" before
 
     # Same scope as the review response: this is the same conversation about the
     # same pull request, continued after CI had its say.
@@ -155,6 +169,16 @@ runs:
         github_token: ${{ inputs.github-token }}
         show_full_output: ${{ inputs.show-full-output }}
         prompt: ${{ steps.prompt.outputs.body }}
+
+    # always(), because an agent that died is exactly when the store's state is worth knowing — still inside the budget gate, which is what "does nothing once the budget is spent" means.
+    - name: Inspect the memory store (after the agent)
+      if: >
+        always() && steps.budget.outputs.attempted == 'true' &&
+        inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" after
 
     - name: Commit and push the fix
       if: steps.budget.outputs.attempted == 'true'

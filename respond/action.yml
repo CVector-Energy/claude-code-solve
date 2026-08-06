@@ -47,6 +47,11 @@ inputs:
     description: Message for the commit holding the agent's edits.
     required: false
     default: 'fix(review): address reviewer feedback'
+  inspect-memory:
+    description: >
+      Log where the auto-memory store actually is, on either side of the agent. A diagnostic for a store whose post-step save fails, and temporary — see scripts/inspect-memory.sh.
+    required: false
+    default: 'false'
 
 outputs:
   session-id:
@@ -67,7 +72,16 @@ runs:
     # this pull request: what an agent learns about the repository is worth having
     # on the next one.
     - name: Restore Claude Code memory
+      id: memory
       uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
+    # $GITHUB_ACTION_PATH is this action's directory inside the checked-out repository, so the script one level up is reachable without a self-referential `uses:` and its pinning dance.
+    - name: Inspect the memory store (before the agent)
+      if: inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" before
 
     - name: Configure git
       shell: bash
@@ -175,6 +189,14 @@ runs:
         else
           echo "path=" >> "$GITHUB_OUTPUT"
         fi
+
+    # always(), because an agent that died is exactly when the store's state is worth knowing.
+    - name: Inspect the memory store (after the agent)
+      if: always() && inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" after
 
     - name: Commit and push agent edits
       shell: bash

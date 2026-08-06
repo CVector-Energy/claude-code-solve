@@ -34,6 +34,11 @@ inputs:
     description: Question to post when triage asks for clarification without saying what it needs.
     required: false
     default: Could you add more detail on the scope and expected outcome so I can plan a fix?
+  inspect-memory:
+    description: >
+      Log where the auto-memory store actually is, on either side of the agent. A diagnostic for a store whose post-step save fails, and temporary — see scripts/inspect-memory.sh.
+    required: false
+    default: 'false'
 
 outputs:
   disposition:
@@ -57,7 +62,16 @@ runs:
     #
     # Restored here and not in the implement action, which runs later in the same job and would otherwise extract the cache a second time over a store this agent has already written to.
     - name: Restore Claude Code memory
+      id: memory
       uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+
+    # $GITHUB_ACTION_PATH is this action's directory inside the checked-out repository, so the script one level up is reachable without a self-referential `uses:` and its pinning dance.
+    - name: Inspect the memory store (before the agent)
+      if: inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" before
 
     # Scoped to this issue, so a later run on it — a new comment, or a re-run after a push — continues this conversation and nothing else. The action's post step saves whatever session this job writes.
     - name: Restore Claude session
@@ -128,6 +142,14 @@ runs:
         else
           echo "path=" >> "$GITHUB_OUTPUT"
         fi
+
+    # always(), because an agent that died is exactly when the store's state is worth knowing. This brackets the triage agent rather than the whole job — implement runs later, on the same store — which is enough to answer both of the questions in the script's header.
+    - name: Inspect the memory store (after the agent)
+      if: always() && inputs.inspect-memory == 'true'
+      shell: bash
+      env:
+        MEMORY_PATH: ${{ steps.memory.outputs.path }}
+      run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" after
 
     - name: Parse triage result
       id: parse

@@ -90,6 +90,28 @@ runs:
 
 Because the callback runs *after* triage, an issue triaged `no-action` never pays for an install. That is why triage is given no `Bash`.
 
+### The other end: `agent-teardown`
+
+`agent-setup` cannot close what it opened — a composite action has no post step. So there is a second callback, **`./.github/actions/agent-teardown`**, run as the job's last step under the same gate as the setup that earned it. Pass `teardown: true` to turn it on; unlike `setup` it is **off** by default, because `uses:` cannot be an expression and a repository without the action would fail at the step.
+
+It runs on `!cancelled()`, not `always()`: a run that failed late pulled everything a run that passed would have, and its work is worth keeping — a cancelled one should end now.
+
+What belongs there is anything whose value is to the *next* run rather than this one, and which has to see the whole job. A container-image cache is the motivating case: the agent pulls images the install never asked for, so packing the cache inside `agent-setup` would miss exactly those and re-pull them every time.
+
+```yaml
+# .github/actions/agent-teardown/action.yml in your repository
+name: 'Agent teardown'
+description: Pack what this run pulled, so the next one does not pull it again.
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/image-cache-save
+      with:
+        cache-key: ${{ env.IMAGE_CACHE_KEY }}   # written to $GITHUB_ENV by agent-setup
+```
+
+The two are separate invocations, so a step output of one is not readable by the other. `$GITHUB_ENV` is how state crosses between them.
+
 ## Actions
 
 | Action | What it does |
@@ -216,6 +238,14 @@ Both are restored for you; neither needs a step of your own.
 **Memory** — the repo-wide store from [claude-code-memory](https://github.com/CVector-Energy/claude-code-memory) — is restored by the triage action and saved by its post step at the end of your job. It is deliberately *not* restored again by `implement`: that action runs later in the same job, and extracting the cache a second time would overwrite memories the triage agent had just written. Using `implement` without `triage` therefore runs without memory.
 
 **The session** is scoped to `issue-<number>`, so a later run on the same issue continues the same conversation. `implement` continues triage's session rather than starting its own, via `resume-session-id`.
+
+### Diagnosing a store that never persists
+
+The memory action's post step has been seen failing with `Path Validation Error`, which means the store was never saved and every run started empty. Either it caches a path the CLI does not write, or the directory it pre-creates does not survive the agent.
+
+`inspect-memory: true` — an input on the three workflows, and on `triage`, `respond` and `fix-ci` directly — prints every `.claude` root on the runner alongside the path the action chose, once before the agent and once after. The "before" listing tells the two explanations apart; the pair tells you whether the directory survived. It is read-only and cannot fail the job.
+
+Temporary. Delete `scripts/inspect-memory.sh`, the inputs and the steps that call it once the store persists.
 
 ## What Stays In Your Workflow
 

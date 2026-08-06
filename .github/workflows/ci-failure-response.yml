@@ -62,6 +62,18 @@ on:
         required: false
         type: boolean
         default: true
+      teardown:
+        description: >
+          Whether to call `./.github/actions/agent-teardown` in the caller once the agent is done. Off by default, because most repositories have nothing to do there; on, the action has to exist.
+        required: false
+        type: boolean
+        default: false
+      inspect-memory:
+        description: >
+          Log where the auto-memory store actually is, on either side of the agent. A temporary diagnostic for a store whose post-step save fails; see scripts/inspect-memory.sh.
+        required: false
+        type: boolean
+        default: false
       runs-on:
         description: Runner label.
         required: false
@@ -142,3 +154,15 @@ jobs:
           show-full-output: true
           git-user-name: ${{ inputs.git-user-name }}
           git-user-email: ${{ inputs.git-user-email }}
+          inspect-memory: ${{ inputs.inspect-memory }}
+
+      # The other half of the callback protocol, and the reason it is a second
+      # action rather than a post step: a composite action cannot declare one.
+      # !cancelled() rather than always(), so a cancelled job is not held open
+      # doing work whose only value is to the next run — but a *failed* one still
+      # gets here, which for this workflow is the common case.
+      - name: Tear down the caller's toolchain
+        if: >
+          !cancelled() && inputs.teardown &&
+          steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
+        uses: ./.github/actions/agent-teardown

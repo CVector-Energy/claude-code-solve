@@ -57,6 +57,18 @@ on:
         required: false
         type: boolean
         default: true
+      teardown:
+        description: >
+          Whether to call `./.github/actions/agent-teardown` in the caller once the agents are done. Off by default, because most repositories have nothing to do there; on, the action has to exist. This is where a cache that should hold everything the run pulled belongs — packing it inside `agent-setup` would miss whatever the agent itself fetched.
+        required: false
+        type: boolean
+        default: false
+      inspect-memory:
+        description: >
+          Log where the auto-memory store actually is, on either side of the triage agent. A temporary diagnostic for a store whose post-step save fails; see scripts/inspect-memory.sh.
+        required: false
+        type: boolean
+        default: false
       ignored-comment-authors:
         description: >
           JSON array of logins whose comments must not start a run. A mirrored bot comment is not a human asking for a fix.
@@ -146,6 +158,7 @@ jobs:
           claude-args: ${{ inputs.triage-args }}
           allowed-bots: ${{ inputs.allowed-bots }}
           show-full-output: true
+          inspect-memory: ${{ inputs.inspect-memory }}
 
       # The callback: the caller's own toolchain, credentials, services — whatever
       # its language needs. Only a fixable issue pays for it, which is the point of
@@ -170,3 +183,15 @@ jobs:
           git-user-name: ${{ inputs.git-user-name }}
           git-user-email: ${{ inputs.git-user-email }}
           success-label: ${{ inputs.success-label }}
+
+      # The other half of the callback protocol, and the reason it is a second
+      # action rather than a post step: a composite action cannot declare one.
+      # !cancelled() rather than always(), so a cancelled job is not held open
+      # doing work whose only value is to the next run — but a *failed* one still
+      # gets here, because a run that failed late pulled the same things a run
+      # that passed would have.
+      - name: Tear down the caller's toolchain
+        if: >
+          !cancelled() && inputs.teardown &&
+          steps.triage.outputs.disposition == 'fixable'
+        uses: ./.github/actions/agent-teardown
