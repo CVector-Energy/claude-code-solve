@@ -376,22 +376,23 @@ const fixNamed = (fragment) =>
 
 test("fix-ci bounds how many times it will chase one branch", () => {
   // Its own push wakes it again through CI, so without a ceiling a failure it
-  // cannot fix becomes a loop that bills per attempt.
+  // cannot fix becomes a loop that bills per attempt. What gets counted, and the
+  // ceiling's behaviour, are tested against the script in attempt-budget.test.js.
   assert.equal(FIXCI().inputs["max-attempts"].default, "3");
-  const budget = fixStep("budget").run;
-  assert.ok(budget.includes("git log"), "the count comes from the branch itself");
-  assert.ok(budget.includes('-ge "$MAX_ATTEMPTS"'));
+  const budget = fixStep("budget");
+  assert.match(budget.run, /scripts\/attempt-budget\.sh/);
+  // The script reads the pull request, so the step has to tell it which one and
+  // hand it a token that may.
+  for (const name of ["GH_TOKEN", "REPO", "PR_NUMBER", "MAX_ATTEMPTS", "COMMIT_PREFIX"]) {
+    assert.ok(budget.env[name], `the budget step does not pass ${name}`);
+  }
 });
 
-test("fix-ci counts attempts from the branch, not from anywhere resettable", () => {
-  // A re-run, a new workflow file, a cleared label — none of those should hand
-  // the agent a fresh budget.
-  const budget = fixStep("budget").run;
-  assert.ok(budget.includes('grep -c "^${COMMIT_PREFIX}"'));
-  assert.ok(
-    fixNamed("commit and push").run.includes("${COMMIT_PREFIX}"),
-    "the commits it counts have to be the commits it writes",
-  );
+test("the commits the budget counts are the commits the agent writes", () => {
+  // Two halves of one convention: a push whose subject drops the prefix would
+  // never be counted, and the ceiling would never bite.
+  assert.equal(fixStep("budget").env.COMMIT_PREFIX, "${{ inputs.commit-prefix }}");
+  assert.ok(fixNamed("commit and push").run.includes("${COMMIT_PREFIX}"));
 });
 
 test("fix-ci does nothing at all once the budget is spent", () => {
@@ -558,9 +559,10 @@ test("the CI responder's ceiling and prompt are the caller's to set", () => {
   assert.equal(fix.with["prompt-template"], "${{ inputs.prompt-template }}");
 });
 
-test("the CI responder checks out the history its budget is counted from", () => {
-  // The attempt count comes from `git log origin/<branch>`, so a shallow checkout
-  // would read zero attempts every time and the ceiling would never bite.
+test("the CI responder checks out the history the agent reads", () => {
+  // The prompt and the agent's own `git log` and `git diff` are how it works out
+  // what the branch already tried; a shallow checkout hides that. (The budget is
+  // counted from the pull request, so it is not what needs the depth.)
   const checkout = jobOf("ci-failure-response").steps.find((s) =>
     (s.uses ?? "").includes("actions/checkout"),
   );

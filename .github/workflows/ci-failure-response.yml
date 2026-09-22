@@ -46,7 +46,7 @@ on:
         default: claude/issue-
       max-attempts:
         description: >
-          How many times the agent may chase one branch's CI before giving up. Counted from its own commits on the branch, so a re-run does not reset it.
+          How many times the agent may chase one branch's CI before giving up. Counted from its own commits on the pull request — not the branch's whole ancestry, which would charge it for attempts merged from other pull requests — so a re-run does not reset it and one branch does not spend another's budget.
         required: false
         type: number
         default: 3
@@ -119,7 +119,9 @@ jobs:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
 
-      # Full history: the attempt budget is counted from the branch's own commits.
+      # Full history, because the agent reads it: the prompt and its `git log`
+      # and `git diff` are how it works out what the branch already tried. (The
+      # attempt budget is not why — that is counted from the pull request.)
       # No persisted credentials — the action pushes over an explicitly
       # authenticated URL.
       - name: Checkout the branch that failed
