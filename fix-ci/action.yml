@@ -13,7 +13,9 @@ inputs:
     description: The failed CI run whose logs the agent is given.
     required: true
   github-token:
-    description: Token for git and gh; needs contents:write and actions:read.
+    description: >
+      Token for git and gh; needs contents:write, actions:read and
+      pull-requests:read — the attempt budget reads the pull request's commits.
     required: true
   anthropic-api-key:
     description: Anthropic API key. A composite action cannot read the caller's secrets.
@@ -29,7 +31,7 @@ inputs:
     required: true
   max-attempts:
     description: >
-      How many times the agent may chase one branch's CI before giving up. Each attempt pushes a commit whose subject carries `commit-prefix`, and those are what get counted — so the ceiling survives a re-run, and a branch cannot loop forever on a failure the agent cannot fix.
+      How many times the agent may chase one branch's CI before giving up. Each attempt pushes a commit whose subject carries `commit-prefix`, and those are what get counted, among the pull request's own commits — so the ceiling survives a re-run, a branch cannot loop forever on a failure the agent cannot fix, and one branch's attempts do not spend another's.
     required: false
     default: '3'
   commit-prefix:
@@ -60,7 +62,7 @@ outputs:
     description: '"true" when an agent ran. "false" when the attempt ceiling was already reached.'
     value: ${{ steps.budget.outputs.attempted }}
   attempts:
-    description: How many attempts this branch had already made, before this run.
+    description: How many attempts this pull request had already made, before this run.
     value: ${{ steps.budget.outputs.attempts }}
   session-id:
     description: The session this run wrote.
@@ -69,27 +71,20 @@ outputs:
 runs:
   using: composite
   steps:
-    # An agent that cannot fix a failure will push, fail CI, and be woken by its
-    # own push. Counting its previous commits bounds that without any state
-    # outside the branch, so a re-run cannot reset the budget.
+    # Bounds the loop the agent would otherwise drive: it pushes, CI fails, and
+    # its own push wakes it again. See scripts/attempt-budget.sh for what is
+    # counted and why it is not the branch's history.
     - name: Check the attempt budget
       id: budget
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
         BRANCH: ${{ inputs.branch }}
         MAX_ATTEMPTS: ${{ inputs.max-attempts }}
         COMMIT_PREFIX: ${{ inputs.commit-prefix }}
-      run: |
-        set -euo pipefail
-        ATTEMPTS=$(git log --format='%s' "origin/${BRANCH}" | grep -c "^${COMMIT_PREFIX}" || true)
-        echo "attempts=$ATTEMPTS" >> "$GITHUB_OUTPUT"
-        if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
-          echo "attempted=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::$ATTEMPTS attempts already made on $BRANCH; leaving this one for a human."
-        else
-          echo "attempted=true" >> "$GITHUB_OUTPUT"
-          echo "Attempt $((ATTEMPTS + 1)) of $MAX_ATTEMPTS on $BRANCH."
-        fi
+      run: bash "$GITHUB_ACTION_PATH/../scripts/attempt-budget.sh"
 
     - name: Restore Claude Code memory
       id: memory
