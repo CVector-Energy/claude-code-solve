@@ -143,8 +143,9 @@ jobs:
           git-user-email: ${{ inputs.git-user-email }}
           inspect-memory: ${{ inputs.inspect-memory }}
 
+      # A cancelled job is closed, but a failed one still uses orderly tear-down.
       - name: Tear down the caller's toolchain
         if: >
-          !cancelled() && inputs.teardown && # A cancelled job is closed, but a failed one still uses orderly tear-down.
+          !cancelled() && inputs.teardown &&
           steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
         uses: ./.github/actions/agent-teardown
