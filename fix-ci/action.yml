@@ -31,7 +31,7 @@ inputs:
     required: true
   max-attempts:
     description: >
-      How many times the agent may chase one branch's CI before giving up. Each attempt pushes a commit whose subject carries `commit-prefix`, and those are what get counted, among the pull request's own commits — so the ceiling survives a re-run, a branch cannot loop forever on a failure the agent cannot fix, and one branch's attempts do not spend another's.
+      How many times in a row the agent may chase one branch's CI before giving up. Each attempt pushes a commit whose subject carries `commit-prefix`, and the consecutive run of those at the tip of the pull request is what gets counted — so the ceiling survives a re-run, a branch cannot loop forever on a failure the agent cannot fix, one branch's attempts do not spend another's, and a commit from anyone else means the next failure is a fresh problem with a fresh budget.
     required: false
     default: '3'
   commit-prefix:
@@ -62,7 +62,7 @@ outputs:
     description: '"true" when an agent ran. "false" when the attempt ceiling was already reached.'
     value: ${{ steps.budget.outputs.attempted }}
   attempts:
-    description: How many attempts this pull request had already made, before this run.
+    description: How many attempts in a row this pull request had already made, before this run.
     value: ${{ steps.budget.outputs.attempts }}
   session-id:
     description: The session this run wrote.

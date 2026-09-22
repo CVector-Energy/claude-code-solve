@@ -68,8 +68,8 @@ test("a pull request with no commits at all still runs", () => {
   assert.equal(out.attempted, "true");
 });
 
-test("each of the agent's own commits spends one attempt", () => {
-  const out = budget(["fix(ci): address CI failure in run 1", "Implement the thing"]);
+test("each of the agent's own commits at the tip spends one attempt", () => {
+  const out = budget(["Implement the thing", "fix(ci): address CI failure in run 1"]);
   assert.equal(out.attempts, "1");
   assert.equal(out.attempted, "true");
 });
@@ -83,6 +83,46 @@ test("the ceiling stops the agent once it is reached", () => {
   assert.equal(out.attempts, "3");
   assert.equal(out.attempted, "false");
   assert.match(out.stdout, /::warning::/);
+});
+
+test("a commit from anyone else resets the count", () => {
+  // The ceiling is there to stop the agent looping on a failure it cannot fix.
+  // Someone else committing means the situation has moved on, so the next
+  // failure is a fresh problem and gets a fresh budget.
+  const out = budget([
+    "fix(ci): address CI failure in run 1",
+    "fix(ci): address CI failure in run 2",
+    "fix(ci): address CI failure in run 3",
+    "Rework the parser properly",
+  ]);
+  assert.equal(out.attempts, "0");
+  assert.equal(out.attempted, "true");
+});
+
+test("only the attempts since that commit count towards the ceiling", () => {
+  const out = budget([
+    "fix(ci): address CI failure in run 1",
+    "fix(ci): address CI failure in run 2",
+    "Rework the parser properly",
+    "fix(ci): address CI failure in run 3",
+  ]);
+  assert.equal(out.attempts, "1");
+  assert.equal(out.attempted, "true");
+});
+
+test("an unbroken run still hits the ceiling, wherever it starts", () => {
+  // The agent's own attempts are consecutive by construction, so a genuine loop
+  // is stopped on the third try however much came before it.
+  const out = budget([
+    "Implement the thing",
+    "fix(ci): address CI failure in run 1",
+    "Address review",
+    "fix(ci): address CI failure in run 2",
+    "fix(ci): address CI failure in run 3",
+    "fix(ci): address CI failure in run 4",
+  ]);
+  assert.equal(out.attempts, "3");
+  assert.equal(out.attempted, "false");
 });
 
 test("the attempts counted are the pull request's own, not the branch's ancestry", () => {
@@ -112,6 +152,6 @@ test("the ceiling is the caller's to set", () => {
 });
 
 test("a caller's own commit prefix is what gets counted", () => {
-  const out = budget(["ci: retry", "feat: real work"], { prefix: "ci: " });
+  const out = budget(["feat: real work", "ci: retry"], { prefix: "ci: " });
   assert.equal(out.attempts, "1");
 });
