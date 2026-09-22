@@ -1,10 +1,8 @@
 name: CI failure response
 
-# CI is the verifier. The solver does not repeat its checks before opening a pull request; this reacts to the verdict instead.
+# Rely on CI to verify code changes, without trusting the coding agent. If CI fails, then the agent is invoked here to solve the problem.
 #
-# The trigger stays with the caller — a called workflow declares none, and `workflow_run` names the CI workflow, which only the caller knows. What the caller must also do is filter the trigger by branch: this job holds a contents:write App token, and a job-level `if:` is too late to stop it starting on a branch the agent does not own.
-#
-# `uses: ./.github/actions/agent-setup` below resolves against the runner's workspace, which is the CALLER's checkout — the same callback the issue and review workflows use. This agent reproduces a CI failure locally, so it needs whatever they need.
+# `uses: ./.github/actions/agent-setup` below resolves against the runner's workspace, which is the CALLER's checkout.
 on:
   workflow_call:
     inputs:
