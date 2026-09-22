@@ -1,18 +1,10 @@
 name: CI failure response
 
-# CI is the verifier. The solver does not repeat its checks before opening a pull
-# request; this reacts to the verdict instead.
+# CI is the verifier. The solver does not repeat its checks before opening a pull request; this reacts to the verdict instead.
 #
-# The trigger stays with the caller — a called workflow declares none, and
-# `workflow_run` names the CI workflow, which only the caller knows. What the
-# caller must also do is filter the trigger by branch: this job holds a
-# contents:write App token, and a job-level `if:` is too late to stop it starting
-# on a branch the agent does not own.
+# The trigger stays with the caller — a called workflow declares none, and `workflow_run` names the CI workflow, which only the caller knows. What the caller must also do is filter the trigger by branch: this job holds a contents:write App token, and a job-level `if:` is too late to stop it starting on a branch the agent does not own.
 #
-# `uses: ./.github/actions/agent-setup` below resolves against the runner's
-# workspace, which is the CALLER's checkout — the same callback the issue and
-# review workflows use. This agent reproduces a CI failure locally, so it needs
-# whatever they need.
+# `uses: ./.github/actions/agent-setup` below resolves against the runner's workspace, which is the CALLER's checkout — the same callback the issue and review workflows use. This agent reproduces a CI failure locally, so it needs whatever they need.
 on:
   workflow_call:
     inputs:
@@ -110,8 +102,7 @@ jobs:
           permission-pull-requests: write
           permission-actions: read
 
-      # A workflow_run event names a branch, not a pull request. Nothing to do if
-      # the branch has none open, and nothing to do if it is not ours.
+      # A workflow_run event names a branch, not a pull request. Nothing to do if the branch has none open, and nothing to do if it is not ours.
       - name: Resolve the pull request
         id: pr
         uses: CVector-Energy/claude-code-solve/resolve-pr@6581f08081467467a207c2612d6447ef7155fc48
@@ -119,11 +110,8 @@ jobs:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
 
-      # Full history, because the agent reads it: the prompt and its `git log`
-      # and `git diff` are how it works out what the branch already tried. (The
-      # attempt budget is not why — that is counted from the pull request.)
-      # No persisted credentials — the action pushes over an explicitly
-      # authenticated URL.
+      # Full history, because the agent reads it: the prompt and its `git log` and `git diff` are how it works out what the branch already tried. (The attempt budget is not why — that is counted from the pull request.)
+      # No persisted credentials — the action pushes over an explicitly authenticated URL.
       - name: Checkout the branch that failed
         if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -158,11 +146,8 @@ jobs:
           git-user-email: ${{ inputs.git-user-email }}
           inspect-memory: ${{ inputs.inspect-memory }}
 
-      # The other half of the callback protocol, and the reason it is a second
-      # action rather than a post step: a composite action cannot declare one.
-      # !cancelled() rather than always(), so a cancelled job is not held open
-      # doing work whose only value is to the next run — but a *failed* one still
-      # gets here, which for this workflow is the common case.
+      # The other half of the callback protocol, and the reason it is a second action rather than a post step: a composite action cannot declare one.
+      # !cancelled() rather than always(), so a cancelled job is not held open doing work whose only value is to the next run — but a *failed* one still gets here, which for this workflow is the common case.
       - name: Tear down the caller's toolchain
         if: >
           !cancelled() && inputs.teardown &&

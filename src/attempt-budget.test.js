@@ -8,16 +8,14 @@ import { test } from "node:test";
 const SCRIPT = path.resolve("scripts/attempt-budget.sh");
 
 /**
- * Run the budget script with `gh pr view` stubbed to return `subjects` as the
- * pull request's commit headlines. Returns the step outputs it wrote.
+ * Run the budget script with `gh pr view` stubbed to return `subjects` as the pull request's commit headlines. Returns the step outputs it wrote.
  */
 function budget(subjects, { maxAttempts = 3, prefix = "fix(ci):" } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "budget-"));
   try {
     const bin = path.join(dir, "bin");
     fs.mkdirSync(bin);
-    // The stub answers any argv; what the script does with the lines is the
-    // behaviour under test.
+    // The stub answers any argv; what the script does with the lines is the behaviour under test.
     fs.writeFileSync(
       path.join(bin, "gh"),
       `#!/bin/bash\nprintf '%s\\n' "$*" >> "$STUB_ARGV"\nprintf '%s' "$STUB_SUBJECTS"\n`,
@@ -88,12 +86,7 @@ test("the ceiling stops the agent once it is reached", () => {
 });
 
 test("the attempts counted are the pull request's own, not the branch's ancestry", () => {
-  // The regression this script exists for. The count came from `git log
-  // origin/<branch>`, which walks the whole ancestry — so three `fix(ci):`
-  // commits merged into the base branch from anywhere disabled the agent on
-  // every pull request in the repository, permanently, before it had tried once.
-  // Asking the pull request for its own commit list is what makes the budget
-  // per-pull-request, so that is the part worth pinning.
+  // The regression this script exists for. The count came from `git log origin/<branch>`, which walks the whole ancestry — so three `fix(ci):` commits merged into the base branch from anywhere disabled the agent on every pull request in the repository, permanently, before it had tried once. Asking the pull request for its own commit list is what makes the budget per-pull-request, so that is the part worth pinning.
   const out = budget(["Implement the thing"]);
   assert.match(out.gh, /^pr view 1 --repo owner\/repo --json commits /);
   assert.equal(out.attempts, "0");
@@ -101,8 +94,7 @@ test("the attempts counted are the pull request's own, not the branch's ancestry
 });
 
 test("the prefix is matched literally, not as a regular expression", () => {
-  // `fix(ci):` is a valid regex that matches something else entirely, and a
-  // prefix with `.` or `*` in it would match more still.
+  // `fix(ci):` is a valid regex that matches something else entirely, and a prefix with `.` or `*` in it would match more still.
   const out = budget(["fixXciY: not an attempt", "fix(ci)X not an attempt either"]);
   assert.equal(out.attempts, "0");
 });
