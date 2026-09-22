@@ -36,7 +36,7 @@ on:
         default: claude/issue-
       max-attempts:
         description: >
-          Maximum number of reworks an agent may do before giving up.
+          Maximum number of consecutive reworks an agent may do before giving up. A commit from anyone else resets the count.
         required: false
         type: number
         default: 3
