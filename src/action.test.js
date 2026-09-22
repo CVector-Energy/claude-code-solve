@@ -451,8 +451,8 @@ test("implement will not claim a pull request that does not exist", () => {
 
 const REUSABLE = {
   issue: ".github/workflows/issue.yml",
-  "pr-review-response": ".github/workflows/pr-review-response.yml",
-  "ci-failure-response": ".github/workflows/ci-failure-response.yml",
+  "review-rework": ".github/workflows/review-rework.yml",
+  "ci-rework": ".github/workflows/ci-rework.yml",
 };
 const workflow = (which) => parse(fs.readFileSync(REUSABLE[which], "utf8"));
 // `on:` is YAML 1.1's boolean true.
@@ -528,17 +528,17 @@ test("the CI responder leaves its trigger to the caller", () => {
   // `workflow_run` names the CI workflow, which only the caller knows — and a
   // called workflow cannot declare a trigger at all. What it can do is read the
   // event, which is all this needs.
-  const w = workflow("ci-failure-response");
+  const w = workflow("ci-rework");
   assert.equal((w.on ?? w[true]).workflow_run, undefined);
-  assert.ok(jobOf("ci-failure-response").if.includes("workflow_run.conclusion == 'failure'"));
-  const fix = jobOf("ci-failure-response").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
+  assert.ok(jobOf("ci-rework").if.includes("workflow_run.conclusion == 'failure'"));
+  const fix = jobOf("ci-rework").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
   assert.equal(fix.with["run-id"], "${{ github.event.workflow_run.id }}");
 });
 
 test("the CI responder acts only on a pull request the agent owns", () => {
   // It holds a contents:write App token and pushes. The caller's branch filter is
   // the cheap check; this is the one that asks the pull request.
-  for (const step of jobOf("ci-failure-response").steps.slice(2)) {
+  for (const step of jobOf("ci-rework").steps.slice(2)) {
     assert.ok(String(step.if).includes("steps.pr.outputs.managed == 'true'"), step.name);
     assert.ok(String(step.if).includes("steps.pr.outputs.exists == 'true'"), step.name);
   }
@@ -547,17 +547,17 @@ test("the CI responder acts only on a pull request the agent owns", () => {
 test("the CI responder's ceiling and prompt are the caller's to set", () => {
   // The prompt is where a repository names its own checks, and the ceiling is what
   // stops an agent it cannot satisfy from looping on its own pushes.
-  const call = callable("ci-failure-response");
+  const call = callable("ci-rework");
   assert.equal(call.inputs["max-attempts"].default, 3);
   assert.equal(call.inputs["prompt-template"].default, ".github/prompts/ci-failure.md");
-  const fix = jobOf("ci-failure-response").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
+  const fix = jobOf("ci-rework").steps.find((s) => (s.uses ?? "").includes("/fix-ci@"));
   assert.equal(fix.with["max-attempts"], "${{ inputs.max-attempts }}");
   assert.equal(fix.with["prompt-template"], "${{ inputs.prompt-template }}");
 });
 
 test("the CI responder checks out the history the agent reads", () => {
   // The prompt and the agent's own `git log` and `git diff` are how it works out what the branch already tried; a shallow checkout hides that. (The budget is counted from the pull request, so it is not what needs the depth.)
-  const checkout = jobOf("ci-failure-response").steps.find((s) =>
+  const checkout = jobOf("ci-rework").steps.find((s) =>
     (s.uses ?? "").includes("actions/checkout"),
   );
   assert.equal(checkout.with["fetch-depth"], 0);
@@ -573,7 +573,7 @@ test("the branch prefix has one home across every workflow", () => {
   }
   // The review workflow's job gate is the one place it is read directly, and it
   // reads the same input rather than a literal.
-  const gate = jobOf("pr-review-response").if;
+  const gate = jobOf("review-rework").if;
   assert.ok(gate.includes("inputs.branch-prefix"));
   assert.ok(!gate.includes("claude/issue-"));
 });

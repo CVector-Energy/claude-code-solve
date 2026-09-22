@@ -7,8 +7,8 @@ Reusable workflows for driving Claude Code through a GitHub issue, and the actio
 | Workflow | What it does |
 |----------|--------------|
 | `…/claude-code-solve/.github/workflows/issue.yml` | Triage an issue, and on a fixable one branch and implement the fix |
-| `…/claude-code-solve/.github/workflows/pr-review-response.yml` | Answer a review on a pull request the agent owns |
-| `…/claude-code-solve/.github/workflows/ci-failure-response.yml` | Fix the branch after CI fails on it, up to a bounded number of attempts |
+| `…/claude-code-solve/.github/workflows/review-rework.yml` | Answer a review on a pull request the agent owns |
+| `…/claude-code-solve/.github/workflows/ci-rework.yml` | Fix the branch after CI fails on it, up to a bounded number of attempts |
 
 A caller supplies its triggers, its permissions, a few conventions, and **one local action** for language-specific initialisation:
 
@@ -55,11 +55,11 @@ on: # zizmor: ignore[dangerous-triggers]
 permissions:
   contents: read
 concurrency:                        # one attempt at a time per branch
-  group: ci-failure-response-${{ github.event.workflow_run.head_branch }}
+  group: ci-rework-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 jobs:
   fix:
-    uses: CVector-Energy/claude-code-solve/.github/workflows/ci-failure-response.yml@<sha>
+    uses: CVector-Energy/claude-code-solve/.github/workflows/ci-rework.yml@<sha>
     with:
       app-id: ${{ vars.APP_ID }}
       fix-args: ${{ ... }}          # this agent edits and builds, so it needs Bash
