@@ -71,9 +71,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # Bounds the loop the agent would otherwise drive: it pushes, CI fails, and
-    # its own push wakes it again. See scripts/attempt-budget.sh for what is
-    # counted and why it is not the branch's history.
+    # Bounds the loop the agent would otherwise drive: it pushes, CI fails, and its own push wakes it again. See scripts/attempt-budget.sh for what is counted and why it is not the branch's history.
     - name: Check the attempt budget
       id: budget
       shell: bash
@@ -99,8 +97,7 @@ runs:
         MEMORY_PATH: ${{ steps.memory.outputs.path }}
       run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" before
 
-    # Same scope as the review response: this is the same conversation about the
-    # same pull request, continued after CI had its say.
+    # Same scope as the review response: this is the same conversation about the same pull request, continued after CI had its say.
     - name: Restore Claude session
       id: session
       if: steps.budget.outputs.attempted == 'true'
@@ -119,9 +116,7 @@ runs:
         git config user.name "$GIT_USER_NAME"
         git config user.email "$GIT_USER_EMAIL"
 
-    # Fetched and rendered in one step, so the log — which carries file contents
-    # and error text from a build — stays a shell variable rather than becoming a
-    # step output a fixed heredoc delimiter could be terminated inside.
+    # Fetched and rendered in one step, so the log — which carries file contents and error text from a build — stays a shell variable rather than becoming a step output a fixed heredoc delimiter could be terminated inside.
     - name: Render prompt
       id: prompt
       if: steps.budget.outputs.attempted == 'true'
@@ -139,8 +134,7 @@ runs:
           echo "Could not read the failed logs for run $RUN_ID." >&2
           exit 1
         fi
-        # Tail it: a failing suite can run to megabytes, and the end is the part
-        # that says what broke.
+        # Tail it: a failing suite can run to megabytes, and the end is the part that says what broke.
         FAILED_LOG=$(printf '%s' "$FAILED_LOG" | tail -c 60000)
         export FAILED_LOG
         # Random per run: untrusted text must not be able to terminate its own value.
@@ -193,8 +187,7 @@ runs:
           echo "The agent changed nothing; there is nothing to push."
           exit 0
         fi
-        # The subject is what the attempt budget counts, so the prefix is not
-        # cosmetic.
+        # The subject is what the attempt budget counts, so the prefix is not cosmetic.
         git commit -m "${COMMIT_PREFIX} address CI failure in run ${RUN_ID}"
 
         REMOTE_SHA=$(git ls-remote "$REMOTE" "refs/heads/${BRANCH}" | awk '{print $1}')
