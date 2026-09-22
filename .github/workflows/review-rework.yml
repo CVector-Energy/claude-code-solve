@@ -1,8 +1,7 @@
-name: PR review response
+name: Review Rework
 
-# Answers a review on a pull request the agent owns. Same callback protocol as the
-# issue solver: `./.github/actions/agent-setup` resolves against the caller's
-# checkout, so initialisation stays with the repository that knows what it needs.
+# Respond to a PR comment.
+
 on:
   workflow_call:
     inputs:

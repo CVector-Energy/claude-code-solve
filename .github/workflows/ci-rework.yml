@@ -1,4 +1,4 @@
-name: CI failure response
+name: CI Rework
 
 # Rely on CI to verify code changes, without trusting the coding agent. If CI fails, then the agent is invoked here to solve the problem.
 #
@@ -16,11 +16,11 @@ on:
         required: true
         type: string
       git-user-name:
-        description: Name the fix commit is authored under.
+        description: Author name for git commits.
         required: true
         type: string
       git-user-email:
-        description: Email the fix commit is authored under.
+        description: Author email for git commits.
         required: true
         type: string
       allowed-bots:
@@ -30,19 +30,19 @@ on:
         default: ''
       branch-prefix:
         description: >
-          What marks a pull request as the agent's. Checked against the pull request itself; the caller's `workflow_run` branch filter is the cheap check that comes first.
+          Branch prefix owned by this agent. Checked against the pull request itself; the caller's `workflow_run` branch filter is the cheap check that comes first.
         required: false
         type: string
         default: claude/issue-
       max-attempts:
         description: >
-          How many times the agent may chase one branch's CI before giving up. Counted from its own commits on the pull request — not the branch's whole ancestry, which would charge it for attempts merged from other pull requests — so a re-run does not reset it and one branch does not spend another's budget.
+          Maximum number of reworks an agent may do before giving up.
         required: false
         type: number
         default: 3
       prompt-template:
         description: >
-          Prompt rendered in the caller's workspace. This is where a repository names its own checks, which is why it is a file rather than an input.
+          Prompt rendered in the caller's workspace.
         required: false
         type: string
         default: .github/prompts/ci-failure.md
@@ -54,7 +54,7 @@ on:
         default: true
       teardown:
         description: >
-          Whether to call `./.github/actions/agent-teardown` in the caller once the agent is done. Off by default, because most repositories have nothing to do there; on, the action has to exist.
+          Whether to call `./.github/actions/agent-teardown` in the caller once the agent is done.
         required: false
         type: boolean
         default: false
@@ -109,7 +109,6 @@ jobs:
           branch-prefix: ${{ inputs.branch-prefix }}
 
       # Full history, because the agent reads it: the prompt and its `git log` and `git diff` are how it works out what the branch already tried. (The attempt budget is not why — that is counted from the pull request.)
-      # No persisted credentials — the action pushes over an explicitly authenticated URL.
       - name: Checkout the branch that failed
         if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -144,10 +143,8 @@ jobs:
           git-user-email: ${{ inputs.git-user-email }}
           inspect-memory: ${{ inputs.inspect-memory }}
 
-      # The other half of the callback protocol, and the reason it is a second action rather than a post step: a composite action cannot declare one.
-      # !cancelled() rather than always(), so a cancelled job is not held open doing work whose only value is to the next run — but a *failed* one still gets here, which for this workflow is the common case.
       - name: Tear down the caller's toolchain
         if: >
-          !cancelled() && inputs.teardown &&
+          !cancelled() && inputs.teardown && # A cancelled job is closed, but a failed one still uses orderly tear-down.
           steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
         uses: ./.github/actions/agent-teardown
