@@ -139,7 +139,7 @@ jobs:
       issues: write
     env:
       TRIAGE_ARGS: |
-        --model claude-opus-5
+        --model claude-opus-5-5
         --allowedTools "Read,Glob,Grep,WebFetch"
         --json-schema '{"type":"object","properties":{"disposition":{"type":"string","enum":["no-action","needs-clarification","fixable"]},"summary":{"type":"string"}},"required":["disposition","summary"]}'
     steps:
@@ -183,7 +183,7 @@ jobs:
           github-token: ${{ steps.app.outputs.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           resume-session-id: ${{ steps.triage.outputs.session-id }}
-          claude-args: '--dangerously-skip-permissions --model claude-opus-5'
+          claude-args: '--dangerously-skip-permissions --model claude-opus-5-5'
           branch: ${{ steps.pr.outputs.branch }}
           git-user-name: my-bot[bot]
           git-user-email: 12345+my-bot[bot]@users.noreply.github.com
