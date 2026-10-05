@@ -122,7 +122,7 @@ jobs:
           permission-actions: read
 
       - name: React to the trigger
-        uses: CVector-Energy/claude-code-solve/reaction@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        uses: CVector-Energy/claude-code-solve/reaction@7e9e340207e10a0166f2492b213ddcbaf38e34ca
         with:
           github-token: ${{ steps.app.outputs.token }}
 
@@ -130,7 +130,7 @@ jobs:
       # branch the agent does not own is actually ruled out.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        uses: CVector-Energy/claude-code-solve/resolve-pr@7e9e340207e10a0166f2492b213ddcbaf38e34ca
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -152,7 +152,7 @@ jobs:
 
       - name: Respond to the review
         if: steps.pr.outputs.managed == 'true'
-        uses: CVector-Energy/claude-code-solve/respond@2796dd30b7e84e77b2af0e18577acd33b01a5644
+        uses: CVector-Energy/claude-code-solve/respond@7e9e340207e10a0166f2492b213ddcbaf38e34ca
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           head-ref: ${{ steps.pr.outputs.branch }}
