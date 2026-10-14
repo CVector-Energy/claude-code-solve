@@ -34,6 +34,12 @@ on:
         required: false
         type: string
         default: claude/issue-
+      allow-rerun:
+        description: >
+          Let the agent ask for the failed jobs to be re-run, for a failure no change would fix, such as a rate-limited registry. The agent never holds a token that can re-run anything: it writes a reason to a file, and a later step re-runs exactly this run's failed jobs with a token made only for that. Only on the run's first attempt, because a re-run makes no commit for `max-attempts` to count.
+        required: false
+        type: boolean
+        default: false
       max-attempts:
         description: >
           Maximum number of consecutive reworks an agent may do before giving up. A commit from anyone else resets the count.
@@ -103,7 +109,7 @@ jobs:
       # A workflow_run event names a branch, not a pull request. Nothing to do if the branch has none open, and nothing to do if it is not ours.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/resolve-pr@1698ad86558ad1b9f0124441c664f26deb91db8d
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -127,7 +133,7 @@ jobs:
       - name: Fix the CI failure
         id: fix
         if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
-        uses: CVector-Energy/claude-code-solve/fix-ci@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/fix-ci@1698ad86558ad1b9f0124441c664f26deb91db8d
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           branch: ${{ steps.pr.outputs.branch }}
@@ -142,6 +148,32 @@ jobs:
           git-user-name: ${{ inputs.git-user-name }}
           git-user-email: ${{ inputs.git-user-email }}
           inspect-memory: ${{ inputs.inspect-memory }}
+          allow-rerun: ${{ inputs.allow-rerun && github.event.workflow_run.run_attempt == 1 }}
+
+      - name: Create a token that can re-run the failed jobs
+        id: rerun-app
+        if: >
+          steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true' &&
+          inputs.allow-rerun && github.event.workflow_run.run_attempt == 1 &&
+          steps.fix.outputs.rerun-requested == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+
+      - name: Re-run the failed jobs
+        id: rerun
+        if: >
+          steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true' &&
+          steps.rerun-app.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.rerun-app.outputs.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh run rerun "$RUN_ID" --failed --repo "$REPO"
 
       # A cancelled job is closed, but a failed one still uses orderly tear-down.
       - name: Tear down the caller's toolchain

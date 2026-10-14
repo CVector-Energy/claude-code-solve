@@ -641,3 +641,37 @@ for (const which of Object.keys(REUSABLE)) {
     }
   });
 }
+
+test("the CI responder re-runs only on request, once, and never with the agent's token", () => {
+  // The agent runs with --dangerously-skip-permissions in some callers, so a tool allowlist cannot stop it using whatever its token permits. A token that can re-run one run can re-run, cancel or delete any of them, so the agent's stays read-only and the re-run gets its own.
+  const steps = jobOf("ci-rework").steps;
+  const agentToken = steps.find((s) => s.id === "app");
+  assert.equal(agentToken.with["permission-actions"], "read");
+  assert.equal(callable("ci-rework").inputs["allow-rerun"].default, false);
+
+  const rerunToken = steps.find((s) => s.id === "rerun-app");
+  assert.equal(rerunToken.with["permission-actions"], "write");
+  assert.equal(rerunToken.with["permission-contents"], undefined);
+  // A re-run makes no commit, so the attempt budget cannot see it; the first attempt is the only one that may ask.
+  assert.ok(rerunToken.if.includes("github.event.workflow_run.run_attempt == 1"));
+  assert.ok(rerunToken.if.includes("steps.fix.outputs.rerun-requested == 'true'"));
+  assert.ok(rerunToken.if.includes("inputs.allow-rerun"));
+  assert.ok(steps.indexOf(rerunToken) > steps.findIndex((s) => s.id === "fix"));
+
+  const rerun = steps.find((s) => s.id === "rerun");
+  assert.equal(rerun.env.GH_TOKEN, "${{ steps.rerun-app.outputs.token }}");
+  assert.equal(rerun.env.RUN_ID, "${{ github.event.workflow_run.id }}");
+  assert.ok(rerun.run.includes('gh run rerun "$RUN_ID" --failed'));
+});
+
+test("fix-ci reads the re-run request before committing, from outside the workspace", () => {
+  // The commit step stages everything in the tree, and an unchanged tree is part of what makes a request count.
+  const steps = FIXCI().runs.steps;
+  const read = fixStep("rerun");
+  assert.ok(steps.indexOf(read) < steps.indexOf(fixNamed("commit and push")));
+  assert.ok(read.if.includes("inputs.allow-rerun == 'true'"));
+  assert.ok(read.env.REQUEST_FILE.startsWith("${{ runner.temp }}"));
+  assert.ok(fixStep("prompt").env.RERUN_REQUEST.includes("runner.temp"));
+  assert.ok(fixStep("prompt").run.includes("$RERUN_REQUEST'"), "substituted into the prompt");
+  assert.equal(FIXCI().inputs["allow-rerun"].default, "false");
+});
