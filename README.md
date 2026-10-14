@@ -72,6 +72,8 @@ jobs:
 
 The agent's push starts CI again, which is what lets this converge and also what could loop. `max-attempts` (default 3) is counted from the agent's own commits on the branch, so a re-run cannot reset it, and a failure it cannot fix stops rather than spinning. It leaves the working tree alone when nothing it can change would help — an empty tree is how it says a human should look.
 
+Some failures need a re-run, not a change: a rate-limited registry, a flaky runner. With `allow-rerun: true`, the prompt template's `$RERUN_REQUEST` is a file the agent can write a reason to. If it does, and leaves the tree unchanged, a later step re-runs that run's failed jobs with an App token made only for that. The agent's own token stays `actions: read`, so even an agent running with `--dangerously-skip-permissions` cannot re-run, cancel or delete anything. Only a run's first attempt can be re-run this way, because a re-run makes no commit for `max-attempts` to count. When re-running isn't on offer, `$RERUN_REQUEST` reads `unavailable`.
+
 ## The callback protocol
 
 Each workflow calls **`./.github/actions/agent-setup`** in the caller, after the checkout and only on the path that needs it. Put whatever the repository needs to build behind that name — a toolchain, a service, cloud credentials. It is an ordinary composite action, so it may `uses:` anything.
