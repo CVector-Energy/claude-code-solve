@@ -1,0 +1,108 @@
+name: Dependabot dist
+
+# Dependabot bumps package-lock.json but never runs the build, so a bump to a
+# dependency bundled into reaction/dist fails CI's "dist is current" check. This
+# rebuilds dist on the Dependabot branch and commits it.
+#
+# This repository is public, so the organization App key is not available and the
+# push uses GITHUB_TOKEN. A GITHUB_TOKEN push does not trigger workflows, so CI is
+# dispatched explicitly for the new commit.
+#
+# Pushing to the branch makes Dependabot treat it as edited: it will no longer
+# rebase the pull request on its own. Comment `@dependabot recreate` to start over.
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs the bumped dependency's code, so it holds no write token, and
+  # --ignore-scripts keeps install hooks from running at all.
+  build:
+    name: Build
+    if: >
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild
+        run: npm run build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reaction-dist
+          path: reaction/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  # Runs nothing from the pull request: it only copies the built files in.
+  commit:
+    name: Commit
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # push the rebuilt dist
+      actions: write # dispatch CI for the new commit
+    steps:
+      # The commit that was built, not the branch tip: if Dependabot has pushed
+      # since, the push below is rejected rather than committing a mismatched dist.
+      - name: Checkout the built commit # zizmor: ignore[artipacked]
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Replace dist with the rebuilt one
+        run: rm -rf reaction/dist
+
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: reaction-dist
+          path: reaction/dist/
+
+      - name: Commit and push
+        id: push
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- reaction/dist && [ -z "$(git ls-files --others --exclude-standard -- reaction/dist)" ]; then
+            echo "reaction/dist is already current."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add -A -- reaction/dist
+          git commit -m "Rebuild reaction/dist"
+          git push origin "HEAD:$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run CI on the new commit
+        if: steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: gh workflow run ci.yml --ref "$BRANCH"
