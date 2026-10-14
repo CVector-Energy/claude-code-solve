@@ -641,3 +641,15 @@ for (const which of Object.keys(REUSABLE)) {
     }
   });
 }
+
+test("fix-ci reads the re-run request before committing, from outside the workspace", () => {
+  // The commit step stages everything in the tree, and an unchanged tree is part of what makes a request count.
+  const steps = FIXCI().runs.steps;
+  const read = fixStep("rerun");
+  assert.ok(steps.indexOf(read) < steps.indexOf(fixNamed("commit and push")));
+  assert.ok(read.if.includes("inputs.allow-rerun == 'true'"));
+  assert.ok(read.env.REQUEST_FILE.startsWith("${{ runner.temp }}"));
+  assert.ok(fixStep("prompt").env.RERUN_REQUEST.includes("runner.temp"));
+  assert.ok(fixStep("prompt").run.includes("$RERUN_REQUEST'"), "substituted into the prompt");
+  assert.equal(FIXCI().inputs["allow-rerun"].default, "false");
+});

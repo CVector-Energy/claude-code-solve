@@ -40,13 +40,18 @@ inputs:
     default: 'fix(ci):'
   prompt-template:
     description: >
-      Template rendered into the prompt. `$PR_NUMBER`, `$BRANCH`, `$RUN_ID` and `$FAILED_LOG` are substituted; nothing else is.
+      Template rendered into the prompt. `$PR_NUMBER`, `$BRANCH`, `$RUN_ID`, `$FAILED_LOG` and `$RERUN_REQUEST` are substituted; nothing else is. `$RERUN_REQUEST` is the file the agent writes a reason to when the failure needs a re-run rather than a change, or `unavailable` when `allow-rerun` is off.
     required: false
     default: .github/prompts/ci-failure.md
   allowed-bots:
     description: Comma-separated bot logins whose comments may reach the agent, or "*".
     required: false
     default: ''
+  allow-rerun:
+    description: >
+      Offer the agent a re-run request file. The agent's token is unchanged: the action only reports the request as `rerun-requested`, and the caller decides whether to act on it.
+    required: false
+    default: 'false'
   show-full-output:
     description: Echo Claude's full JSON output into the job log.
     required: false
@@ -64,6 +69,9 @@ outputs:
   attempts:
     description: How many attempts in a row this pull request had already made, before this run.
     value: ${{ steps.budget.outputs.attempts }}
+  rerun-requested:
+    description: '"true" when the agent asked for the failed jobs to be re-run and left the tree unchanged.'
+    value: ${{ steps.rerun.outputs.rerun-requested }}
   session-id:
     description: The session this run wrote.
     value: ${{ steps.agent.outputs.session_id }}
@@ -128,8 +136,13 @@ runs:
         BRANCH: ${{ inputs.branch }}
         RUN_ID: ${{ inputs.run-id }}
         TEMPLATE: ${{ inputs.prompt-template }}
+        # Outside the workspace, so the commit step below cannot pick it up.
+        RERUN_REQUEST: ${{ inputs.allow-rerun == 'true' && format('{0}/claude-rerun-request', runner.temp) || 'unavailable' }}
       run: |
         set -euo pipefail
+        if [[ "$RERUN_REQUEST" != unavailable ]]; then
+          rm -f "$RERUN_REQUEST"
+        fi
         if ! FAILED_LOG=$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>&1); then
           echo "Could not read the failed logs for run $RUN_ID." >&2
           exit 1
@@ -141,7 +154,7 @@ runs:
         DELIM="EOF_$(openssl rand -hex 16)"
         {
           echo "body<<$DELIM"
-          envsubst '$PR_NUMBER $BRANCH $RUN_ID $FAILED_LOG' < "$TEMPLATE"
+          envsubst '$PR_NUMBER $BRANCH $RUN_ID $FAILED_LOG $RERUN_REQUEST' < "$TEMPLATE"
           echo "$DELIM"
         } >> "$GITHUB_OUTPUT"
 
@@ -168,6 +181,15 @@ runs:
       env:
         MEMORY_PATH: ${{ steps.memory.outputs.path }}
       run: bash "$GITHUB_ACTION_PATH/../scripts/inspect-memory.sh" after
+
+    # Before the commit, which is what would make the tree look unchanged.
+    - name: Read the re-run request
+      id: rerun
+      if: steps.budget.outputs.attempted == 'true' && inputs.allow-rerun == 'true'
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ runner.temp }}/claude-rerun-request
+      run: bash "$GITHUB_ACTION_PATH/../scripts/rerun-request.sh"
 
     - name: Commit and push the fix
       if: steps.budget.outputs.attempted == 'true'
