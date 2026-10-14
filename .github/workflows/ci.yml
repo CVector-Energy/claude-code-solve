@@ -6,6 +6,8 @@ name: CI
 on:
   push:
   pull_request:
+  # Dispatched by dependabot-dist.yml, whose GITHUB_TOKEN push triggers nothing.
+  workflow_dispatch:
 
 permissions: {}
 
