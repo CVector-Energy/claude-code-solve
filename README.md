@@ -51,7 +51,7 @@ on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: ['claude/issue-**']   # must agree with branch-prefix
+    branches: ['bot/**']             # must agree with branch-prefix
 permissions:
   contents: read
 concurrency:                        # one attempt at a time per branch

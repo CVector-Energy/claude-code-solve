@@ -30,10 +30,10 @@ on:
         default: ''
       branch-prefix:
         description: >
-          Branch prefix owned by this agent. Checked against the pull request itself; the caller's `workflow_run` branch filter is the cheap check that comes first.
+          Branch prefix owned by the agents. Checked against the pull request itself; the caller's `workflow_run` branch filter is the cheap check that comes first. The default covers every agent's branch: the issue solver's `bot/issue-N` and the pull requests other automation opens under `bot/`.
         required: false
         type: string
-        default: claude/issue-
+        default: bot/
       allow-rerun:
         description: >
           Let the agent ask for the failed jobs to be re-run, for a failure no change would fix, such as a rate-limited registry. The agent never holds a token that can re-run anything: it writes a reason to a file, and a later step re-runs exactly this run's failed jobs with a token made only for that. Only on the run's first attempt, because a re-run makes no commit for `max-attempts` to count.

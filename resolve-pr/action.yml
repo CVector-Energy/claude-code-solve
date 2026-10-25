@@ -10,7 +10,7 @@ inputs:
     description: >
       What marks a branch as the agent's own. This names the branch a fix goes on, and it is also what identifies a pull request as one the review workflow may act on, so it lives here rather than in each workflow that has to agree about it.
     required: false
-    default: claude/issue-
+    default: bot/issue-
 
 outputs:
   number:

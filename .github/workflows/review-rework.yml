@@ -30,10 +30,10 @@ on:
         default: ''
       branch-prefix:
         description: >
-          What marks a pull request as the agent's. Used to skip the job early and checked again by resolve-pr, so a review on someone else's branch costs nothing.
+          What marks a pull request as the agents'. Used to skip the job early and checked again by resolve-pr, so a review on someone else's branch costs nothing. The default covers every agent's branch: the issue solver's `bot/issue-N` and the pull requests other automation opens under `bot/`.
         required: false
         type: string
-        default: claude/issue-
+        default: bot/
       setup:
         description: >
           Whether to call `./.github/actions/agent-setup` in the caller before the agent.
