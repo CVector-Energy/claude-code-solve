@@ -35,7 +35,7 @@ function budget(subjects, { maxAttempts = 3, prefix = "fix(ci):" } = {}) {
         GH_TOKEN: "stub",
         REPO: "owner/repo",
         PR_NUMBER: "1",
-        BRANCH: "claude/issue-1",
+        BRANCH: "bot/issue-1",
         MAX_ATTEMPTS: String(maxAttempts),
         COMMIT_PREFIX: prefix,
         GITHUB_OUTPUT: outFile,

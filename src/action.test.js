@@ -235,7 +235,7 @@ test("resolve-pr owns the branch prefix the workflows had to agree about", () =>
   // It named the fix branch in the issue workflow, decided eligibility in the
   // review workflow, and defaulted inside implement. Three places that had to
   // match, and nothing made them.
-  assert.equal(RESOLVE().inputs["branch-prefix"].default, "claude/issue-");
+  assert.equal(RESOLVE().inputs["branch-prefix"].default, "bot/issue-");
   assert.ok(RESOLVE().outputs.branch, "callers need the branch it derived");
 });
 
@@ -279,7 +279,7 @@ test("implement takes the branch rather than spelling the prefix again", () => {
   assert.equal(ACTIONS.implement.inputs["branch-prefix"], undefined);
   assert.equal(ACTIONS.implement.inputs.branch.required, true);
   assert.ok(
-    !JSON.stringify(ACTIONS.implement).includes("claude/issue-"),
+    !JSON.stringify(ACTIONS.implement).includes("bot/issue-"),
     "implement still hardcodes a branch name",
   );
 });
@@ -565,9 +565,14 @@ test("the CI responder checks out the history the agent reads", () => {
 
 test("the branch prefix has one home across every workflow", () => {
   // It named the fix branch, gated the review workflow's job, and defaulted inside
-  // implement. One input now, and resolve-pr is told it.
+  // implement. One input now, and resolve-pr is told it. The issue workflow names
+  // its own branches; the rework workflows answer on every agent's branch, which
+  // includes those.
+  const PREFIX = { issue: "bot/issue-", "ci-rework": "bot/", "review-rework": "bot/" };
   for (const which of Object.keys(REUSABLE)) {
-    assert.equal(callable(which).inputs["branch-prefix"].default, "claude/issue-");
+    assert.ok(PREFIX[which], `no expected prefix for ${which}`);
+    assert.equal(callable(which).inputs["branch-prefix"].default, PREFIX[which]);
+    assert.ok(PREFIX[which].startsWith(PREFIX["review-rework"]));
     const resolve = jobOf(which).steps.find((s) => (s.uses ?? "").includes("/resolve-pr@"));
     assert.equal(resolve.with["branch-prefix"], "${{ inputs.branch-prefix }}");
   }
@@ -575,7 +580,7 @@ test("the branch prefix has one home across every workflow", () => {
   // reads the same input rather than a literal.
   const gate = jobOf("review-rework").if;
   assert.ok(gate.includes("inputs.branch-prefix"));
-  assert.ok(!gate.includes("claude/issue-"));
+  assert.ok(!gate.includes("bot/"));
 });
 
 // ─── the teardown callback ───────────────────────────────────────────────────
