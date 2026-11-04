@@ -44,7 +44,7 @@ on:
           Prefix for the fix branch. Also what marks a pull request as the agent's, so the review-response workflow has to agree with this.
         required: false
         type: string
-        default: claude/issue-
+        default: bot/issue-
       success-label:
         description: >
           Label added to the issue once a pull request exists on the branch. Empty adds none.
