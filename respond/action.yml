@@ -47,6 +47,16 @@ inputs:
     description: Message for the commit holding the agent's edits.
     required: false
     default: 'fix(review): address reviewer feedback'
+  memory-bucket:
+    description: >
+      S3 bucket holding the repository's auto-memory store. Empty skips the store, and the agent starts from nothing.
+    required: false
+    default: ''
+  memory-role:
+    description: >
+      IAM role that reads and writes the memory bucket, assumed with the job's OIDC token; the job needs `id-token: write`.
+    required: false
+    default: ''
   inspect-memory:
     description: >
       Log where the auto-memory store actually is, on either side of the agent. A diagnostic for a store whose post-step save fails, and temporary — see scripts/inspect-memory.sh.
@@ -73,7 +83,11 @@ runs:
     # on the next one.
     - name: Restore Claude Code memory
       id: memory
-      uses: CVector-Energy/claude-code-memory@32ab9dda7097d27002a689bb5ad86016be21c8e6 # v0.1.0
+      if: inputs.memory-bucket != ''
+      uses: CVector-Energy/claude-code-memory@0cedc537dd342c95d24a6db3fac4dcf3443e05bd # s3-store
+      with:
+        bucket: ${{ inputs.memory-bucket }}
+        role-to-assume: ${{ inputs.memory-role }}
 
     # $GITHUB_ACTION_PATH is this action's directory inside the checked-out repository, so the script one level up is reachable without a self-referential `uses:` and its pinning dance.
     - name: Inspect the memory store (before the agent)

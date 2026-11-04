@@ -64,6 +64,18 @@ on:
         required: false
         type: boolean
         default: false
+      memory-bucket:
+        description: >
+          S3 bucket holding the repository's Claude Code auto-memory store. Empty runs the agents without one.
+        required: false
+        type: string
+        default: ''
+      memory-role:
+        description: >
+          IAM role that reads and writes the memory bucket, assumed with the job's OIDC token.
+        required: false
+        type: string
+        default: ''
       inspect-memory:
         description: >
           Log where the auto-memory store actually is, on either side of the agent. A temporary diagnostic for a store whose post-step save fails; see scripts/inspect-memory.sh.
@@ -109,7 +121,7 @@ jobs:
       # A workflow_run event names a branch, not a pull request. Nothing to do if the branch has none open, and nothing to do if it is not ours.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@1698ad86558ad1b9f0124441c664f26deb91db8d
+        uses: CVector-Energy/claude-code-solve/resolve-pr@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -133,7 +145,7 @@ jobs:
       - name: Fix the CI failure
         id: fix
         if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
-        uses: CVector-Energy/claude-code-solve/fix-ci@1698ad86558ad1b9f0124441c664f26deb91db8d
+        uses: CVector-Energy/claude-code-solve/fix-ci@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           branch: ${{ steps.pr.outputs.branch }}
@@ -147,6 +159,8 @@ jobs:
           show-full-output: true
           git-user-name: ${{ inputs.git-user-name }}
           git-user-email: ${{ inputs.git-user-email }}
+          memory-bucket: ${{ inputs.memory-bucket }}
+          memory-role: ${{ inputs.memory-role }}
           inspect-memory: ${{ inputs.inspect-memory }}
           allow-rerun: ${{ inputs.allow-rerun && github.event.workflow_run.run_attempt == 1 }}
 

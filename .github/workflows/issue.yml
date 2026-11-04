@@ -63,6 +63,18 @@ on:
         required: false
         type: boolean
         default: false
+      memory-bucket:
+        description: >
+          S3 bucket holding the repository's Claude Code auto-memory store. Empty runs the agents without one.
+        required: false
+        type: string
+        default: ''
+      memory-role:
+        description: >
+          IAM role that reads and writes the memory bucket, assumed with the job's OIDC token.
+        required: false
+        type: string
+        default: ''
       inspect-memory:
         description: >
           Log where the auto-memory store actually is, on either side of the triage agent. A temporary diagnostic for a store whose post-step save fails; see scripts/inspect-memory.sh.
@@ -124,7 +136,7 @@ jobs:
 
       # Removed in a post step when the job ends, pass or fail.
       - name: React to the trigger
-        uses: CVector-Energy/claude-code-solve/reaction@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/reaction@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           github-token: ${{ steps.app.outputs.token }}
 
@@ -133,7 +145,7 @@ jobs:
       # whatever that pull request is carrying.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/resolve-pr@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -150,7 +162,7 @@ jobs:
       - name: Triage the issue
         id: triage
         if: steps.pr.outputs.exists != 'true'
-        uses: CVector-Energy/claude-code-solve/triage@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/triage@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -158,6 +170,8 @@ jobs:
           claude-args: ${{ inputs.triage-args }}
           allowed-bots: ${{ inputs.allowed-bots }}
           show-full-output: true
+          memory-bucket: ${{ inputs.memory-bucket }}
+          memory-role: ${{ inputs.memory-role }}
           inspect-memory: ${{ inputs.inspect-memory }}
 
       # The callback: the caller's own toolchain, credentials, services — whatever
@@ -170,7 +184,7 @@ jobs:
       - name: Implement the fix
         id: implement
         if: steps.triage.outputs.disposition == 'fixable'
-        uses: CVector-Energy/claude-code-solve/implement@7e9e340207e10a0166f2492b213ddcbaf38e34ca
+        uses: CVector-Energy/claude-code-solve/implement@866bb78c8be959f6a7e095533fb0b0e9385c5835
         with:
           issue-number: ${{ github.event.issue.number }}
           branch: ${{ steps.pr.outputs.branch }}
