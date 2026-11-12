@@ -121,7 +121,7 @@ jobs:
       # A workflow_run event names a branch, not a pull request. Nothing to do if the branch has none open, and nothing to do if it is not ours.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/resolve-pr@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -145,7 +145,7 @@ jobs:
       - name: Fix the CI failure
         id: fix
         if: steps.pr.outputs.exists == 'true' && steps.pr.outputs.managed == 'true'
-        uses: CVector-Energy/claude-code-solve/fix-ci@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/fix-ci@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           pr-number: ${{ steps.pr.outputs.number }}
           branch: ${{ steps.pr.outputs.branch }}
