@@ -136,7 +136,7 @@ jobs:
 
       # Removed in a post step when the job ends, pass or fail.
       - name: React to the trigger
-        uses: CVector-Energy/claude-code-solve/reaction@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/reaction@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           github-token: ${{ steps.app.outputs.token }}
 
@@ -145,7 +145,7 @@ jobs:
       # whatever that pull request is carrying.
       - name: Resolve the pull request
         id: pr
-        uses: CVector-Energy/claude-code-solve/resolve-pr@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/resolve-pr@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           github-token: ${{ steps.app.outputs.token }}
           branch-prefix: ${{ inputs.branch-prefix }}
@@ -162,7 +162,7 @@ jobs:
       - name: Triage the issue
         id: triage
         if: steps.pr.outputs.exists != 'true'
-        uses: CVector-Energy/claude-code-solve/triage@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/triage@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           issue-number: ${{ github.event.issue.number }}
           github-token: ${{ steps.app.outputs.token }}
@@ -184,7 +184,7 @@ jobs:
       - name: Implement the fix
         id: implement
         if: steps.triage.outputs.disposition == 'fixable'
-        uses: CVector-Energy/claude-code-solve/implement@866bb78c8be959f6a7e095533fb0b0e9385c5835
+        uses: CVector-Energy/claude-code-solve/implement@d554e319a17b39cbfa00fd4d296d9ac3591238d8
         with:
           issue-number: ${{ github.event.issue.number }}
           branch: ${{ steps.pr.outputs.branch }}

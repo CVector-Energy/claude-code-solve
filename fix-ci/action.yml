@@ -105,7 +105,7 @@ runs:
     - name: Restore Claude Code memory
       id: memory
       if: steps.budget.outputs.attempted == 'true' && inputs.memory-bucket != ''
-      uses: CVector-Energy/claude-code-memory@0cedc537dd342c95d24a6db3fac4dcf3443e05bd # s3-store
+      uses: CVector-Energy/claude-code-memory@bf38ca47d9efdb164f9347c9e30fc4a43e5cab9a # v0.2.0
       with:
         bucket: ${{ inputs.memory-bucket }}
         role-to-assume: ${{ inputs.memory-role }}
