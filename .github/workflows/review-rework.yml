@@ -160,7 +160,7 @@ jobs:
 
       - name: Set up the caller's toolchain
         if: inputs.setup && steps.pr.outputs.managed == 'true'
-        uses: ./.github/actions/agent-setup
+        uses: ./.github/actions/agent-setup # zizmor: ignore[self-repository] resolves in the caller's checkout, not this repository
 
       - name: Respond to the review
         if: steps.pr.outputs.managed == 'true'
@@ -191,4 +191,4 @@ jobs:
         if: >
           !cancelled() && inputs.teardown &&
           steps.pr.outputs.managed == 'true'
-        uses: ./.github/actions/agent-teardown
+        uses: ./.github/actions/agent-teardown # zizmor: ignore[self-repository] resolves in the caller's checkout, not this repository

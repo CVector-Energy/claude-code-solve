@@ -179,7 +179,7 @@ jobs:
       # keeping triage read-only.
       - name: Set up the caller's toolchain
         if: inputs.setup && steps.triage.outputs.disposition == 'fixable'
-        uses: ./.github/actions/agent-setup
+        uses: ./.github/actions/agent-setup # zizmor: ignore[self-repository] resolves in the caller's checkout, not this repository
 
       - name: Implement the fix
         id: implement
@@ -208,4 +208,4 @@ jobs:
         if: >
           !cancelled() && inputs.teardown &&
           steps.triage.outputs.disposition == 'fixable'
-        uses: ./.github/actions/agent-teardown
+        uses: ./.github/actions/agent-teardown # zizmor: ignore[self-repository] resolves in the caller's checkout, not this repository
